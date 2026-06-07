@@ -192,9 +192,6 @@ export class ChatAgentToolsContribution extends Disposable implements IWorkbench
 		});
 	}
 }
-registerWorkbenchContribution2(ChatAgentToolsContribution.ID, ChatAgentToolsContribution, WorkbenchPhase.AfterRestored);
-registerWorkbenchContribution2(AgentHostSandboxForwarder.ID, AgentHostSandboxForwarder, WorkbenchPhase.AfterRestored);
-
 // #endregion Contributions
 
 // #region Actions

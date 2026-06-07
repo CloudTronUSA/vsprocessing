@@ -209,7 +209,7 @@ export class MainThreadTextEditors implements MainThreadTextEditorsShape {
 				isTextEditorDiffInformationEqual(this._uriIdentityService, a, b))
 		}, reader => {
 			const editorModel = editorModelObs.read(reader);
-			const editorChanges = editorChangesObs.read(reader).read(reader);
+			const editorChanges = editorChangesObs.read(reader)?.read(reader);
 			if (!editorModel || !editorChanges) {
 				return undefined;
 			}

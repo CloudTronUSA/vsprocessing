@@ -63,7 +63,7 @@ import { basename } from '../../../../base/common/path.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { ScmHistoryItemResolver } from '../../multiDiffEditor/browser/scmMultiDiffSourceResolver.js';
 import { IResourceNode, ResourceTree } from '../../../../base/common/resourceTree.js';
-import { URI } from '../../../../base/common/uri.js';
+import { URI, UriComponents } from '../../../../base/common/uri.js';
 import { ITreeCompressionDelegate } from '../../../../base/browser/ui/tree/asyncDataTree.js';
 import { ICompressibleKeyboardNavigationLabelProvider, ICompressibleTreeRenderer } from '../../../../base/browser/ui/tree/objectTree.js';
 import { ICompressedTreeNode } from '../../../../base/browser/ui/tree/compressedObjectTreeModel.js';
@@ -71,7 +71,6 @@ import { ILabelService } from '../../../../platform/label/common/label.js';
 import { IDragAndDropData } from '../../../../base/browser/dnd.js';
 import { ElementsDragAndDropData, ListViewTargetSector } from '../../../../base/browser/ui/list/listView.js';
 import { CodeDataTransfers } from '../../../../platform/dnd/browser/dnd.js';
-import { SCMHistoryItemTransferData } from './scmHistoryChatContext.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { IMarkdownRendererService } from '../../../../platform/markdown/browser/markdownRenderer.js';
 import { MarkdownString } from '../../../../base/common/htmlContent.js';
@@ -80,6 +79,12 @@ const PICK_REPOSITORY_ACTION_ID = 'workbench.scm.action.graph.pickRepository';
 const PICK_HISTORY_ITEM_REFS_ACTION_ID = 'workbench.scm.action.graph.pickHistoryItemRefs';
 
 type TreeElement = SCMHistoryItemViewModelTreeElement | SCMHistoryItemLoadMoreTreeElement | SCMHistoryItemChangeViewModelTreeElement | IResourceNode<SCMHistoryItemChangeViewModelTreeElement, SCMHistoryItemViewModelTreeElement>;
+
+interface SCMHistoryItemTransferData {
+	readonly name: string;
+	readonly resource: UriComponents;
+	readonly historyItem: ISCMHistoryItem;
+}
 
 class SCMRepositoryActionViewItem extends ActionViewItem {
 	constructor(private readonly _repository: ISCMRepository, action: IAction, options?: IDropdownMenuActionViewItemOptions) {

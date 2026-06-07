@@ -387,4 +387,3 @@ registerAction2(class AddCellOutputToChatAction extends Action2 {
 });
 
 registerAction2(SelectAndInsertKernelVariableAction);
-registerWorkbenchContribution2(NotebookChatContribution.ID, NotebookChatContribution, WorkbenchPhase.BlockRestore);

@@ -53,8 +53,6 @@ import '../workbench/services/keybinding/electron-browser/nativeKeyboardLayout.j
 import '../workbench/services/path/electron-browser/pathService.js';
 import '../workbench/services/themes/electron-browser/nativeHostColorSchemeService.js';
 import '../workbench/services/extensionManagement/electron-browser/extensionManagementService.js';
-import '../workbench/services/mcp/electron-browser/mcpGalleryManifestService.js';
-import '../workbench/services/mcp/electron-browser/mcpWorkbenchManagementService.js';
 import '../workbench/services/encryption/electron-browser/encryptionService.js';
 import '../workbench/services/imageResize/electron-browser/imageResizeService.js';
 import '../workbench/services/secrets/electron-browser/secretStorageService.js';
@@ -94,20 +92,11 @@ import '../workbench/services/browserView/electron-browser/playwrightWorkbenchSe
 import '../workbench/services/process/electron-browser/processService.js';
 import '../workbench/services/power/electron-browser/powerService.js';
 
-import { ILocalGitService } from '../platform/git/common/localGitService.js';
 import { InstantiationType, registerSingleton } from '../platform/instantiation/common/extensions.js';
-import { registerSharedProcessRemoteService } from '../platform/ipc/electron-browser/services.js';
-import { IPluginGitService } from '../workbench/contrib/chat/common/plugins/pluginGitService.js';
-import { NativePluginGitCommandService } from '../workbench/contrib/chat/electron-browser/pluginGitCommandService.js';
 import { IUserDataInitializationService, UserDataInitializationService } from '../workbench/services/userData/browser/userDataInit.js';
 import { SyncDescriptor } from '../platform/instantiation/common/descriptors.js';
 
 registerSingleton(IUserDataInitializationService, new SyncDescriptor(UserDataInitializationService, [[]], true));
-
-// Override the browser PluginGitCommandService with the native one that always
-// runs git locally via the shared process.
-registerSingleton(IPluginGitService, NativePluginGitCommandService, InstantiationType.Delayed);
-registerSharedProcessRemoteService(ILocalGitService, 'localGit');
 
 
 //#endregion
@@ -191,43 +180,12 @@ import '../workbench/contrib/encryption/electron-browser/encryption.contribution
 // Emergency Alert
 import '../workbench/contrib/emergencyAlert/electron-browser/emergencyAlert.contribution.js';
 
-// MCP
-import '../workbench/contrib/mcp/electron-browser/mcp.contribution.js';
-
 // Policy Export
-import '../workbench/contrib/policyExport/electron-browser/policyExport.contribution.js';
 
 //#endregion
 
 
 //#region --- sessions contributions
-
-import './electron-browser/sessions.desktop.contribution.js';
-
-// Remote Agent Host
-import '../workbench/services/agentHost/electron-browser/agentHostService.js';
-import '../platform/agentHost/electron-browser/remoteAgentHostService.js';
-import '../platform/agentHost/electron-browser/sshRemoteAgentHostService.js';
-import '../platform/agentHost/electron-browser/wslRemoteAgentHostService.js';
-import './contrib/providers/remoteAgentHost/electron-browser/tunnelAgentHostService.js';
-import './contrib/providers/remoteAgentHost/browser/remoteAgentHost.contribution.js';
-import './contrib/providers/remoteAgentHost/browser/remoteAgentHostTerminal.contribution.js';
-import './contrib/providers/remoteAgentHost/browser/tunnelAgentHost.contribution.js';
-
-// Chat
-import './contrib/agentFeedback/browser/agentFeedback.contribution.js';
-import './contrib/chat/electron-browser/chat.contribution.js';
-
-// Local Agent Host
-import './contrib/providers/agentHost/browser/localAgentHost.contribution.js';
-import './contrib/providers/agentHost/browser/agentSessionSettings.contribution.js';
-import './contrib/providers/agentHost/browser/agentHostSettings.contribution.js';
-import './contrib/providers/agentHost/browser/agentHostSessionBranchActions.js';
-import './contrib/providers/agentHost/browser/agentHostSkillButtons.js';
-import './contrib/providers/agentHost/electron-browser/agentHost.contribution.js';
-
-// Tunnel Host (allow remote connections to local agent host)
-import './contrib/tunnelHost/electron-browser/tunnelHost.contribution.js';
 
 //#endregion
 

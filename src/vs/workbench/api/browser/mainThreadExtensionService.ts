@@ -54,8 +54,26 @@ export class MainThreadExtensionService implements MainThreadExtensionServiceSha
 		internalExtHostContext._setExtensionHostProxy(
 			new ExtensionHostProxy(extHostContext.getProxy(ExtHostContext.ExtHostExtensionService))
 		);
+		const excludedAiMainThreadActors = new Set([
+			MainContext.MainThreadLanguageModels,
+			MainContext.MainThreadEmbeddings,
+			MainContext.MainThreadChatAgents2,
+			MainContext.MainThreadLanguageModelTools,
+			MainContext.MainThreadMcp,
+			MainContext.MainThreadAiRelatedInformation,
+			MainContext.MainThreadAiEmbeddingVector,
+			MainContext.MainThreadChatStatus,
+			MainContext.MainThreadChatQuota,
+			MainContext.MainThreadChatInputNotification,
+			MainContext.MainThreadAiSettingsSearch,
+			MainContext.MainThreadChatSessions,
+			MainContext.MainThreadChatOutputRenderer,
+			MainContext.MainThreadChatContext,
+			MainContext.MainThreadChatDebug,
+			MainContext.MainThreadCodeMapper,
+		]);
 		// eslint-disable-next-line local/code-no-any-casts, @typescript-eslint/no-explicit-any
-		internalExtHostContext._setAllMainProxyIdentifiers(Object.keys(MainContext).map((key) => (<any>MainContext)[key]));
+		internalExtHostContext._setAllMainProxyIdentifiers(Object.keys(MainContext).map((key) => (<any>MainContext)[key]).filter(actor => !excludedAiMainThreadActors.has(actor)));
 	}
 
 	public dispose(): void {

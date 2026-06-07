@@ -152,7 +152,7 @@ export class NativeWorkbenchEnvironmentService extends AbstractNativeEnvironment
 	get filesToWait(): IPathsToWaitFor | undefined { return this.configuration.filesToWait; }
 
 	@memoize
-	get isSessionsWindow(): boolean { return !!this.configuration.isSessionsWindow; }
+	get isSessionsWindow(): boolean { return false; }
 
 	constructor(
 		private readonly configuration: INativeWindowConfiguration,
