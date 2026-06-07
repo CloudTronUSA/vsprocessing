@@ -1,0 +1,10 @@
+{
+  "displayName": "Web Processing",
+  "description": "Compile and run Processing sketches in the browser.",
+  "container.title": "Processing",
+  "view.controls.name": "Processing",
+  "command.category": "Processing",
+  "command.compile": "Compile",
+  "command.run": "Run",
+  "command.stop": "Stop"
+}

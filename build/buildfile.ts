@@ -67,7 +67,6 @@ const buildfile = {
 	workerBackgroundTokenization,
 	workbenchDesktop,
 	workbenchWeb,
-	sessionsWeb,
 	keyboardMaps,
 	code,
 	codeWeb,

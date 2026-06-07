@@ -165,7 +165,7 @@ export class WorkbenchAssignmentService extends Disposable implements IAssignmen
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@IProductService private readonly productService: IProductService,
 		@IWorkbenchEnvironmentService environmentService: IWorkbenchEnvironmentService,
-		@IInstantiationService private readonly instantiationService: IInstantiationService,
+		@IInstantiationService _instantiationService: IInstantiationService,
 	) {
 		super();
 
@@ -283,7 +283,7 @@ export class WorkbenchAssignmentService extends Disposable implements IAssignmen
 		return tasClient;
 	}
 
-	private async refetchAssignments(): Promise<void> {
+	async refetchAssignments(): Promise<void> {
 		if (!this.tasClient) {
 			return; // Setup has not started, assignments will use latest filters
 		}

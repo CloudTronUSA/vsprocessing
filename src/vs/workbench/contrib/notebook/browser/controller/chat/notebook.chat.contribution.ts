@@ -19,7 +19,7 @@ import { Action2, MenuId, registerAction2 } from '../../../../../../platform/act
 import { ContextKeyExpr, IContextKey, IContextKeyService } from '../../../../../../platform/contextkey/common/contextkey.js';
 import { ServicesAccessor } from '../../../../../../platform/instantiation/common/instantiation.js';
 import { IQuickInputService, IQuickPickItem } from '../../../../../../platform/quickinput/common/quickInput.js';
-import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../../../common/contributions.js';
+import { IWorkbenchContribution } from '../../../../../common/contributions.js';
 import { IEditorService } from '../../../../../services/editor/common/editorService.js';
 import { IChatWidget, IChatWidgetService } from '../../../../chat/browser/chat.js';
 import { IChatContextPicker, IChatContextPickerItem, IChatContextPickerPickItem, IChatContextPickService } from '../../../../chat/browser/attachments/chatContextPickService.js';
@@ -41,7 +41,7 @@ import { CTX_NOTEBOOK_CHAT_HAS_AGENT } from './notebookChatContext.js';
 
 const NotebookKernelVariableKey = 'kernelVariable';
 
-class NotebookChatContribution extends Disposable implements IWorkbenchContribution {
+export class NotebookChatContribution extends Disposable implements IWorkbenchContribution {
 	static readonly ID = 'workbench.contrib.notebookChatContribution';
 
 	private readonly _ctxHasProvider: IContextKey<boolean>;

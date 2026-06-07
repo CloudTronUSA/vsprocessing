@@ -16,7 +16,7 @@ import { MenuId, registerAction2, Action2 } from '../../../../platform/actions/c
 import { Registry } from '../../../../platform/registry/common/platform.js';
 import { MarkersViewMode, Markers, MarkersContextKeys } from '../common/markers.js';
 import Messages from './messages.js';
-import { IWorkbenchContributionsRegistry, Extensions as WorkbenchExtensions, IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
+import { IWorkbenchContributionsRegistry, Extensions as WorkbenchExtensions, IWorkbenchContribution } from '../../../common/contributions.js';
 import { IMarkersView } from './markers.js';
 import { LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';

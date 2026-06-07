@@ -228,11 +228,13 @@ export function createApiFactoryAndRegisterActors(accessor: ServicesAccessor): I
 	};
 	// eslint-disable-next-line local/code-no-any-casts
 	const disabledAiApi = new Proxy({}, { get: () => aiDisabled }) as any;
+	const disabledAiEvent = Event.None as vscode.Event<any>;
 	const extHostLanguageModels = disabledAiApi;
 	const extHostLanguageModelTools = disabledAiApi;
 	const extHostChatSessions = disabledAiApi;
 	const extHostChatAgents2 = disabledAiApi;
 	const extHostChatContext = disabledAiApi;
+	const extHostChatOutputRenderer = disabledAiApi;
 	const extHostChatDebug = disabledAiApi;
 	const extHostAiRelatedInformation = disabledAiApi;
 	const extHostAiEmbeddingVector = disabledAiApi;
@@ -1064,7 +1066,7 @@ export function createApiFactoryAndRegisterActors(accessor: ServicesAccessor): I
 			},
 			onDidChangeActiveChatPanelSessionResource: (listeners, thisArgs?, disposables?) => {
 				checkProposedApiEnabled(extension, 'chatParticipantPrivate');
-				return _asExtensionEvent(extHostChatAgents2.onDidChangeActiveChatPanelSessionResource)(listeners, thisArgs, disposables);
+				return disabledAiEvent(listeners, thisArgs, disposables);
 			},
 			get browserTabs() {
 				checkProposedApiEnabled(extension, 'browser');
@@ -1709,7 +1711,7 @@ export function createApiFactoryAndRegisterActors(accessor: ServicesAccessor): I
 			},
 			onDidDisposeChatSession: (listeners, thisArgs?, disposables?) => {
 				checkProposedApiEnabled(extension, 'chatParticipantPrivate');
-				return _asExtensionEvent(extHostChatAgents2.onDidDisposeChatSession)(listeners, thisArgs, disposables);
+				return disabledAiEvent(listeners, thisArgs, disposables);
 			},
 			updateQuotas: (quotas: vscode.ChatQuotaSnapshots) => {
 				checkProposedApiEnabled(extension, 'chatParticipantPrivate');
@@ -1911,7 +1913,7 @@ export function createApiFactoryAndRegisterActors(accessor: ServicesAccessor): I
 			},
 			onDidChangeMcpServerDefinitions: (...args) => {
 				checkProposedApiEnabled(extension, 'mcpServerDefinitions');
-				return _asExtensionEvent(extHostMcp.onDidChangeMcpServerDefinitions)(...args);
+				return disabledAiEvent(...args);
 			},
 			get mcpServerDefinitions() {
 				checkProposedApiEnabled(extension, 'mcpServerDefinitions');
@@ -1923,7 +1925,7 @@ export function createApiFactoryAndRegisterActors(accessor: ServicesAccessor): I
 			},
 			onDidChangeChatRequestTools(...args) {
 				checkProposedApiEnabled(extension, 'chatParticipantAdditions');
-				return _asExtensionEvent(extHostChatAgents2.onDidChangeChatRequestTools)(...args);
+				return disabledAiEvent(...args);
 			}
 		};
 

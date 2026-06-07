@@ -19,7 +19,6 @@ import { ILogService } from '../../../../../platform/log/common/log.js';
 import { IThemeService, Themable } from '../../../../../platform/theme/common/themeService.js';
 import { ISharedWebContentExtractorService } from '../../../../../platform/webContentExtractor/common/webContentExtractor.js';
 import { IExtensionService, isProposedApiEnabled } from '../../../../services/extensions/common/extensions.js';
-import { extractSCMHistoryItemDropData } from '../../../scm/browser/scmHistoryChatContext.js';
 import { IChatRequestVariableEntry } from '../../common/attachments/chatVariableEntries.js';
 import { IChatWidget } from '../chat.js';
 import { ChatAttachmentModel } from '../attachments/chatAttachmentModel.js';
@@ -35,8 +34,7 @@ enum ChatDragAndDropType {
 	SYMBOL,
 	HTML,
 	MARKER,
-	NOTEBOOK_CELL_OUTPUT,
-	SCM_HISTORY_ITEM
+	NOTEBOOK_CELL_OUTPUT
 }
 
 const IMAGE_DATA_REGEX = /^data:image\/[a-z]+;base64,/;
@@ -194,8 +192,6 @@ export class ChatDragAndDrop extends Themable {
 		// This is an estimation based on the datatransfer types/items
 		if (containsDragType(e, CodeDataTransfers.NOTEBOOK_CELL_OUTPUT)) {
 			return ChatDragAndDropType.NOTEBOOK_CELL_OUTPUT;
-		} else if (containsDragType(e, CodeDataTransfers.SCM_HISTORY_ITEM)) {
-			return ChatDragAndDropType.SCM_HISTORY_ITEM;
 		} else if (containsImageDragType(e)) {
 			return this.extensionService.extensions.some(ext => isProposedApiEnabled(ext, 'chatReferenceBinaryData')) ? ChatDragAndDropType.IMAGE : undefined;
 		} else if (containsDragType(e, 'text/html')) {
@@ -231,7 +227,6 @@ export class ChatDragAndDrop extends Themable {
 			case ChatDragAndDropType.MARKER: return localize('problem', 'Problem');
 			case ChatDragAndDropType.HTML: return localize('url', 'URL');
 			case ChatDragAndDropType.NOTEBOOK_CELL_OUTPUT: return localize('notebookOutput', 'Output');
-			case ChatDragAndDropType.SCM_HISTORY_ITEM: return localize('scmHistoryItem', 'Change');
 		}
 	}
 
@@ -244,13 +239,6 @@ export class ChatDragAndDrop extends Themable {
 			const notebookOutputData = extractNotebookCellOutputDropData(e);
 			if (notebookOutputData) {
 				return this.chatAttachmentResolveService.resolveNotebookOutputAttachContext(notebookOutputData);
-			}
-		}
-
-		if (containsDragType(e, CodeDataTransfers.SCM_HISTORY_ITEM)) {
-			const scmHistoryItemData = extractSCMHistoryItemDropData(e);
-			if (scmHistoryItemData) {
-				return this.chatAttachmentResolveService.resolveSourceControlHistoryItemAttachContext(scmHistoryItemData);
 			}
 		}
 
