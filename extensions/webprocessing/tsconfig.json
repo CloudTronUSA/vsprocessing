@@ -3,6 +3,10 @@
 	"compilerOptions": {
 		"rootDir": "./src",
 		"outDir": "./out",
+		"lib": [
+			"ES2024",
+			"DOM"
+		],
 		"types": [],
 		"typeRoots": [
 			"./node_modules/@types"

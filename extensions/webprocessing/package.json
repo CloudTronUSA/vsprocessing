@@ -50,6 +50,7 @@
         {
           "id": "webprocessing.controls",
           "name": "%view.controls.name%",
+          "type": "webview",
           "visibility": "visible"
         }
       ]
