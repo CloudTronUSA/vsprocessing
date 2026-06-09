@@ -36,8 +36,6 @@ import { IMarkdownString, MarkdownString } from '../../../../base/common/htmlCon
 import { IsSessionsWindowContext, RemoteNameContext, VirtualWorkspaceContext } from '../../../common/contextkeys.js';
 import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
 import { WorkbenchActionExecutedClassification, WorkbenchActionExecutedEvent } from '../../../../base/common/actions.js';
-import { KeybindingWeight } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
-import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
 import { DomEmitter } from '../../../../base/browser/event.js';
 import { ExtensionIdentifier } from '../../../../platform/extensions/common/extensions.js';
@@ -194,11 +192,7 @@ export class RemoteStatusIndicator extends Disposable implements IWorkbenchContr
 					id: RemoteStatusIndicator.REMOTE_ACTIONS_COMMAND_ID,
 					category,
 					title: nls.localize2('remote.showMenu', "Show Remote Menu"),
-					f1: true,
-					keybinding: {
-						weight: KeybindingWeight.WorkbenchContrib,
-						primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyO,
-					}
+					f1: false
 				});
 			}
 			run = () => that.showRemoteMenu();
@@ -556,8 +550,8 @@ export class RemoteStatusIndicator extends Disposable implements IWorkbenchContr
 			}
 		}
 
-		this.renderRemoteStatusIndicator(RemoteStatusIndicator.DEFAULT_REMOTE_STATUS_LABEL, nls.localize('noHost.tooltip', "Open a Remote Window"));
-		return;
+		this.remoteStatusEntry?.dispose();
+		this.remoteStatusEntry = undefined;
 	}
 
 	private renderRemoteStatusIndicator(initialText: string, initialTooltip?: string | MarkdownString, command?: string, showProgress?: boolean): void {

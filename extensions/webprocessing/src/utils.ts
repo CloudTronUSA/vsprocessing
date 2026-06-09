@@ -6,8 +6,22 @@ declare const TextDecoder: {
 	new(): { decode(input?: Uint8Array): string };
 };
 
+export interface WorkspaceSource {
+	readonly uri: vscode.Uri;
+	readonly path: string;
+	readonly content: string;
+}
+
 export async function collectProcessingSources(root: vscode.Uri): Promise<ProcessingSource[]> {
-	const result: ProcessingSource[] = [];
+	return collectWorkspaceSources(root, '.pde');
+}
+
+export async function collectJavaSources(root: vscode.Uri): Promise<WorkspaceSource[]> {
+	return collectWorkspaceSources(root, '.java');
+}
+
+async function collectWorkspaceSources(root: vscode.Uri, extension: string): Promise<WorkspaceSource[]> {
+	const result: WorkspaceSource[] = [];
 	async function visit(folder: vscode.Uri, relativeFolder: string): Promise<void> {
 		const entries = await vscode.workspace.fs.readDirectory(folder);
 		entries.sort(([a], [b]) => a.localeCompare(b));
@@ -19,9 +33,9 @@ export async function collectProcessingSources(root: vscode.Uri): Promise<Proces
 					continue;
 				}
 				await visit(child, relativePath);
-			} else if (type === vscode.FileType.File && name.toLowerCase().endsWith('.pde')) {
+			} else if (type === vscode.FileType.File && name.toLowerCase().endsWith(extension)) {
 				const bytes = await vscode.workspace.fs.readFile(child);
-				result.push({ path: relativePath, content: new TextDecoder().decode(bytes) });
+				result.push({ uri: child, path: relativePath, content: new TextDecoder().decode(bytes) });
 			}
 		}
 	}
@@ -80,7 +94,11 @@ export function isProcessingUri(uri: vscode.Uri): boolean {
 	return uri.path.toLowerCase().endsWith('.pde');
 }
 
-function isInWorkspaceFolder(uri: vscode.Uri, workspaceFolder: vscode.WorkspaceFolder): boolean {
+export function isJavaUri(uri: vscode.Uri): boolean {
+	return uri.path.toLowerCase().endsWith('.java');
+}
+
+export function isInWorkspaceFolder(uri: vscode.Uri, workspaceFolder: vscode.WorkspaceFolder): boolean {
 	if (uri.scheme !== workspaceFolder.uri.scheme || uri.authority !== workspaceFolder.uri.authority) {
 		return false;
 	}
