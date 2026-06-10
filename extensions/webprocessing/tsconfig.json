@@ -7,13 +7,14 @@
 			"ES2024",
 			"DOM"
 		],
-		"types": [],
+		"types": [
+			"vscode"
+		],
 		"typeRoots": [
 			"./node_modules/@types"
 		]
 	},
 	"include": [
-		"src/**/*",
-		"../../src/vscode-dts/vscode.d.ts"
+		"src/**/*"
 	]
 }

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import type { ProcessingDiagnostic, ProcessingSketchTimings } from '../lib/teavm-javac/processing-teavm.js';
-import type { ProcessingPreprocessResult } from '../lib/teavm-javac/teavm-javac.js';
+import type { ProcessingDiagnostic, ProcessingSketchTimings } from '@worldeditaxe/teavm-javac/processing';
+import type { ProcessingPreprocessResult } from '@worldeditaxe/teavm-javac';
 
 declare const TextDecoder: {
 	new(): { decode(input?: Uint8Array): string };
@@ -188,12 +188,12 @@ export function identifyEntrypoint<T extends { readonly path?: string }>(sources
 	return undefined;
 }
 
-export function buildArtifactFileUri(workspaceFolder: vscode.WorkspaceFolder): vscode.Uri {
-	return vscode.Uri.joinPath(workspaceFolder.uri, buildArtifactFileName(workspaceFolder));
+export function buildArtifactFileUri(workspaceFolder: vscode.WorkspaceFolder, extension: 'wasm' | 'js' = 'wasm'): vscode.Uri {
+	return vscode.Uri.joinPath(workspaceFolder.uri, buildArtifactFileName(workspaceFolder, extension));
 }
 
-export function buildArtifactFileName(workspaceFolder: vscode.WorkspaceFolder): string {
-	return `${toFileBaseName(workspaceFolder.name, 'sketch')}.compiled.wasm`;
+export function buildArtifactFileName(workspaceFolder: vscode.WorkspaceFolder, extension: 'wasm' | 'js' = 'wasm'): string {
+	return `${toFileBaseName(workspaceFolder.name, 'sketch')}.compiled.${extension}`;
 }
 
 export async function exists(uri: vscode.Uri): Promise<boolean> {
@@ -300,5 +300,5 @@ export async function readTemplate(extensionUri: vscode.Uri, name: string): Prom
 }
 
 export function renderTemplate(template: string, values: Record<string, string>): string {
-	return template.replace(/\{\{([a-zA-Z0-9]+)\}\}/g, (match, key: string) => values[key] ?? match);
+	return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (match, key: string) => values[key] ?? match);
 }

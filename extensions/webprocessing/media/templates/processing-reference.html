@@ -10,8 +10,6 @@
 			margin: 0;
 			overflow: hidden;
 			background: var(--vscode-editor-background);
-			color: var(--vscode-foreground);
-			font-family: var(--vscode-font-family);
 		}
 		iframe {
 			display: block;
@@ -28,7 +26,14 @@
 		const payload = JSON.parse("{{payload}}");
 		const frame = document.getElementById('reference');
 		frame.title = payload.title;
-		frame.src = payload.url;
+
+		if (payload.kind === 'pdf') {
+			const viewerUrl = new URL(payload.pdfViewerPageUri);
+			viewerUrl.searchParams.set('file', payload.url);
+			frame.src = viewerUrl.toString();
+		} else {
+			frame.src = payload.url;
+		}
 	</script>
 </body>
 </html>

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 	<meta charset="UTF-8">
-	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; script-src 'nonce-{{nonce}}' 'unsafe-eval' 'wasm-unsafe-eval' {{cspSource}}; connect-src {{cspSource}};">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; script-src 'nonce-{{nonce}}' 'unsafe-eval' 'wasm-unsafe-eval' blob: {{cspSource}}; connect-src {{cspSource}};">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<style>
 		html, body { height: 100%; margin: 0; overflow: hidden; background: var(--vscode-editor-background); color: var(--vscode-foreground); font-family: var(--vscode-font-family); }
@@ -31,14 +31,18 @@
 		// if not, we know the user has stopped or restarted the sketch, so we abort starting.
 		let generation = 0;
 
-		let canvasBackend;
+		let p5Instance;
 		let wasmRuntime;
 		let sketchInstance;
 		let canvasObserver;
 		let resolveWasmBytes;
+		let resolveJsText;
 
 		const wasmBytesFromHost = new Promise(resolve => {
 			resolveWasmBytes = resolve;
+		});
+		const jsTextFromHost = new Promise(resolve => {
+			resolveJsText = resolve;
 		});
 
 		const send = message => vscode.postMessage(message);
@@ -105,12 +109,14 @@
 				stop();
 			} else if (event.data?.type === 'wasmBytes') {
 				resolveWasmBytes(new Uint8Array(event.data.bytes));
+			} else if (event.data?.type === 'jsText') {
+				resolveJsText(event.data.text || '');
 			}
 		});
 
 		// set up other stuff, notify ready
 		window.addEventListener('resize', fitCanvas);
-		send({ type: 'readyForWasm' });
+		send({ type: 'readyForArtifact' });
 
 		function stop() {
 			generation++;
@@ -124,12 +130,12 @@
 				sketchInstance?.dispose?.();
 				sketchInstance?.destroy?.();
 				sketchInstance?.stop?.();
-				canvasBackend?.noLoop?.();
+				p5Instance?.remove?.();
 			} catch (error) {
 				console.warn(error);
 			}
 			sketchInstance = undefined;
-			canvasBackend = undefined;
+			p5Instance = undefined;
 			wasmRuntime = undefined;
 			canvasObserver?.disconnect();
 			canvasObserver = undefined;
@@ -168,33 +174,70 @@
 			status.textContent = 'Starting...';
 
 			// fetch files
-			const [runtimeModule, processingModule, wasmResponse] = await Promise.all([
-				import(payload.wasmRuntimeUri),
-				import(payload.processingUri),
-				payload.wasmUri ? fetch(payload.wasmUri) : Promise.resolve(undefined)
+			const [runtimeModule, artifactResponse] = await Promise.all([
+				payload.output === 'wasm-gc' ? import(payload.wasmRuntimeUri) : Promise.resolve(undefined),
+				payload.output === 'wasm-gc' && payload.artifactUri ? fetch(payload.artifactUri) : Promise.resolve(undefined)
 			]);
+			await loadP5();
 			if (current !== generation) return;
-			if (wasmResponse && !wasmResponse.ok) {
-				throw new Error('Failed to load compiled WebAssembly: HTTP ' + wasmResponse.status);
+			if (artifactResponse && !artifactResponse.ok) {
+				throw new Error('Failed to load compiled WebAssembly: HTTP ' + artifactResponse.status);
 			}
+
+			const start = payload.output === 'js'
+				? (await importJsSketch()).start
+				: await loadWasmStart(runtimeModule, artifactResponse);
+			if (typeof start !== 'function') {
+				throw new Error('Compiled Processing sketch did not export start.');
+			}
+
+			await new Promise((resolve, reject) => {
+				p5Instance = new window.p5(p => {
+					p.setup = () => {
+						try {
+							sketchInstance = start(p);
+							watchCanvasSize();
+							status.textContent = 'Running...';
+							send({ type: 'log-raw', text: '[runtime] Render backend used: p5' });
+							send({ type: 'started' });
+							resolve();
+						} catch (error) {
+							reject(error);
+						}
+					};
+				}, sketch);
+			});
+		}
+
+		async function loadP5() {
+			if (typeof window.p5 === 'function') {
+				return;
+			}
+			await new Promise((resolve, reject) => {
+				const script = document.createElement('script');
+				script.src = payload.p5Uri;
+				script.onload = resolve;
+				script.onerror = () => reject(new Error('Failed to load p5.js.'));
+				document.head.appendChild(script);
+			});
+		}
+
+		async function loadWasmStart(runtimeModule, wasmResponse) {
 			// host can set the wasm bytes directly. so we can load from that too.
 			const wasmBytes = wasmResponse ? new Uint8Array(await wasmResponse.arrayBuffer()) : await wasmBytesFromHost;
-
-			// load runtime, create canvas backend and start sketch
 			wasmRuntime = await runtimeModule.load(wasmBytes, {});
-			if (current !== generation) return;
+			return wasmRuntime?.exports?.start;
+		}
 
-			const start = wasmRuntime?.exports?.start;
-			if (typeof start !== 'function') {
-				throw new Error('Compiled Processing sketch did not export start(runtime).');
+		async function importJsSketch() {
+			if (payload.artifactUri) {
+				return import(payload.artifactUri);
 			}
-
-			canvasBackend = processingModule.createCanvas2DBackend(sketch, {});
-			sketchInstance = start(canvasBackend);
-			if (canvasBackend.canvas) {
-				watchCanvasSize();
-				status.textContent = 'Running...';
-				send({ type: 'started' });
+			const moduleUrl = URL.createObjectURL(new Blob([await jsTextFromHost], { type: 'text/javascript' }));
+			try {
+				return await import(moduleUrl);
+			} finally {
+				URL.revokeObjectURL(moduleUrl);
 			}
 		}
 		run().catch(error => {	// this is for any error that occurs BEFORE processing actually runs

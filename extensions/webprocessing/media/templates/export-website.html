@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #000000;
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            padding: 2rem;
+        }
+
+        header {
+            margin-bottom: 3rem;
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 2rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+        }
+
+        #content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 1.5rem;
+        }
+
+        .error-container {
+            width: 100%;
+            max-width: 800px;
+            display: none;
+        }
+
+        .error-container.visible {
+            display: block;
+        }
+
+        .error-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem 1rem;
+            background: #1a0000;
+            border: 1px solid #ff3333;
+            border-bottom: none;
+            border-radius: 4px 4px 0 0;
+        }
+
+        .error-header svg {
+            flex-shrink: 0;
+        }
+
+        .error-header span {
+            font-size: 0.875rem;
+            color: #ff6666;
+        }
+
+        #error {
+            background: #1a0000;
+            border: 1px solid #ff3333;
+            border-top: 1px solid #ff3333;
+            border-radius: 0 0 4px 4px;
+            padding: 1rem;
+            font-family: "JetBrains Mono", "Monaco", "Menlo", "Consolas", monospace;
+            font-size: 0.875rem;
+            color: #ff6666;
+            min-height: 80px;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        canvas {
+            display: block;
+            max-width: 100%;
+            height: auto;
+        }
+
+        .console-container {
+            width: 100%;
+            max-width: 800px;
+        }
+
+        .console-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.75rem 1rem;
+            background: #0a0a0a;
+            border: 1px solid #333333;
+            border-bottom: none;
+            border-radius: 4px 4px 0 0;
+        }
+
+        .console-header-left {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .console-header svg {
+            flex-shrink: 0;
+        }
+
+        .console-header span {
+            font-family: "JetBrains Mono", "Monaco", "Menlo", "Consolas", monospace;
+            font-size: 0.875rem;
+            color: #888888;
+        }
+
+        .console-clear {
+            font-family: "JetBrains Mono", "Monaco", "Menlo", "Consolas", monospace;
+            font-size: 0.875rem;
+            color: #666666;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+
+        .console-clear:hover {
+            color: #ffffff;
+        }
+
+        #console {
+            background: #0a0a0a;
+            border: 1px solid #333333;
+            border-top: 1px solid #333333;
+            border-radius: 0 0 4px 4px;
+            padding: 1rem;
+            font-family: "JetBrains Mono", "Monaco", "Menlo", "Consolas", monospace;
+            font-size: 0.875rem;
+            color: #ffffff;
+            min-height: 120px;
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        #console:empty::before {
+            content: "Console output...";
+            color: #444444;
+        }
+
+        footer {
+            margin-top: 3rem;
+            font-size: 0.875rem;
+            color: #888888;
+            text-align: center;
+        }
+    </style>
+    {{ custom_scripts }}
+    <script src="processing.js"></script>
+    <script>
+        const UI = {
+            /**
+             * Update console output
+             * @param {string} message - The message to display in the console
+             * @param {boolean} append - If true, append to existing content. If false, replace.
+             */
+            updateConsole: function (message, append = false) {
+                const consoleEl = document.getElementById('console');
+                if (append) {
+                    consoleEl.textContent += (consoleEl.textContent ? '\n' : '') + message;
+                } else {
+                    consoleEl.textContent = message;
+                }
+                consoleEl.scrollTop = consoleEl.scrollHeight;
+            },
+
+            /**
+             * Clear console output
+             */
+            clearConsole: function () {
+                document.getElementById('console').textContent = '';
+            },
+
+            /**
+             * Set error message and show error box
+             * @param {string} message - The error message to display
+             * @param {string} header - Optional header text (normal font)
+             */
+            showError: function (message, header = 'Error') {
+                const errorContainer = document.querySelector('.error-container');
+                const errorEl = document.getElementById('error');
+                const headerSpan = document.querySelector('.error-header span');
+
+                headerSpan.textContent = header;
+                errorEl.textContent = message;
+                errorContainer.classList.add('visible');
+                errorEl.scrollTop = errorEl.scrollHeight;
+            },
+
+            /**
+             * Hide error box
+             */
+            hideError: function () {
+                document.querySelector('.error-container').classList.remove('visible');
+            },
+
+            /**
+             * Clear and hide error box
+             */
+            clearError: function () {
+                const errorContainer = document.querySelector('.error-container');
+                const errorEl = document.getElementById('error');
+                const headerSpan = document.querySelector('.error-header span');
+
+                errorEl.textContent = '';
+                headerSpan.textContent = 'Error';
+                errorContainer.classList.remove('visible');
+            }
+        };
+
+        // Add click handler for clear terminal button
+        document.addEventListener('DOMContentLoaded', function () {
+            document.querySelector('.console-clear').addEventListener('click', function () {
+                UI.clearConsole();
+            });
+        });
+    </script>
+</head>
+
+<body>
+    <header>
+        <h1>{{ headline }}</h1>
+    </header>
+
+    <section id="content">
+        <div class="error-container">
+            <div class="error-header">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="8" cy="8" r="7" stroke="#ff6666" stroke-width="1.5" />
+                    <path d="M8 4v5" stroke="#ff6666" stroke-width="1.5" stroke-linecap="round" />
+                    <circle cx="8" cy="11" r="0.75" fill="#ff6666" />
+                </svg>
+                <span>Error</span>
+            </div>
+            <div id="error"></div>
+        </div>
+
+        <canvas id="{{ canvas_id }}"></canvas>
+
+        <div class="console-container">
+            <div class="console-header">
+                <div class="console-header-left">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M2 3l4 4-4 4M7 11h6" stroke="#888888" stroke-width="1.5" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                    </svg>
+                    <span>Terminal</span>
+                </div>
+                <span class="console-clear">clear</span>
+            </div>
+            <div id="console"></div>
+        </div>
+    </section>
+
+    <footer>
+        {{ footer_content }}
+    </footer>
+
+    <!-- {{ template_debug }} -->
+</body>
+
+</html>

@@ -7,6 +7,8 @@ node_modules/
 .build/
 .vscode/extensions/**/out/
 extensions/**/dist/
+extensions/webprocessing/.vscode-test-web/
+extensions/webprocessing/web-workspace/
 src/vs/base/browser/ui/codicons/codicon/codicon.ttf
 /out*/
 /extensions/**/out/

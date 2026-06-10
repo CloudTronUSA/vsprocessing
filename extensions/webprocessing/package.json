@@ -30,8 +30,10 @@
     "onCommand:webprocessing.compile",
     "onCommand:webprocessing.run",
     "onCommand:webprocessing.stop",
+    "onCommand:webprocessing.exportWebsite",
     "onCommand:webprocessing.openReference",
-    "onCommand:webprocessing.openApcsaReference"
+    "onCommand:webprocessing.openApcsaReference",
+    "onCommand:webprocessing.openReferenceSheet"
   ],
   "contributes": {
     "languages": [
@@ -48,8 +50,30 @@
         "*.pde": "java"
       }
     },
+    "configuration": {
+      "title": "%configuration.title%",
+      "properties": {
+        "webprocessing.processingOutput": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "wasm-gc",
+            "js"
+          ],
+          "enumItemLabels": [
+            "auto (use fastest option)",
+            "wasm-gc (faster)",
+            "js (more compatible)"
+          ],
+          "markdownDescription": "%configuration.processingOutput.markdownDescription%",
+          "scope": "resource",
+          "order": 10
+        }
+      }
+    },
     "views": {
-      "explorer": [
+      "webprocessing": [
         {
           "id": "webprocessing.controls",
           "name": "%view.controls.name%",
@@ -78,6 +102,12 @@
         "icon": "$(debug-stop)"
       },
       {
+        "command": "webprocessing.exportWebsite",
+        "title": "%command.exportWebsite%",
+        "category": "%command.category%",
+        "icon": "$(export)"
+      },
+      {
         "command": "webprocessing.openReference",
         "title": "%command.openReference%",
         "category": "%command.category%",
@@ -86,6 +116,12 @@
       {
         "command": "webprocessing.openApcsaReference",
         "title": "%command.openApcsaReference%",
+        "category": "%command.category%",
+        "icon": "$(references)"
+      },
+      {
+        "command": "webprocessing.openReferenceSheet",
+        "title": "%command.openReferenceSheet%",
         "category": "%command.category%",
         "icon": "$(references)"
       }
@@ -105,10 +141,26 @@
           "when": "webprocessing.isRunning"
         },
         {
+          "command": "webprocessing.exportWebsite",
+          "when": "workspaceFolderCount != 0 && !webprocessing.isCompiling && !webprocessing.isRunning"
+        },
+        {
           "command": "webprocessing.openReference"
         },
         {
           "command": "webprocessing.openApcsaReference"
+        },
+        {
+          "command": "webprocessing.openReferenceSheet"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "webprocessing",
+          "title": "%container.title%",
+          "icon": "$(symbol-event)"
         }
       ]
     }
@@ -124,10 +176,26 @@
     "typecheck-web": "tsgo --project ./tsconfig.browser.json --noEmit",
     "watch-web": "npm-run-all2 -lp watch-bundle-web watch-typecheck-web",
     "watch-bundle-web": "node ./esbuild.browser.mts --watch",
-    "watch-typecheck-web": "tsgo --project ./tsconfig.browser.json --noEmit --watch"
+    "watch-typecheck-web": "tsgo --project ./tsconfig.browser.json --noEmit --watch",
+    "serve-web": "vscode-test-web --extensionDevelopmentPath=. --browser chromium --port 3000 --open-devtools",
+    "dev:web": "npm run build-web && npm-run-all2 -lp watch-web serve-web"
+  },
+  "dependencies": {
+    "@types/node": "^25.9.2",
+	    "@worldeditaxe/teavm-javac": "https://github.com/WorldEditAxe/teavm-javac/releases/download/v0.1.1/teavm-javac-0.1.1.tgz",
+    "eclipse-jdt-ls-web": "https://github.com/CloudTronUSA/eclipse.jdt.ls-web/releases/download/v0.1.1/eclipse-jdt-ls-web-1.59.0-SNAPSHOT.tgz",
+    "pdfjs-dist": "^6.0.227"
+  },
+  "devDependencies": {
+    "@types/vscode": "1.100.0",
+    "@typescript/native-preview": "^7.0.0-dev.20260527",
+    "@vscode/test-web": "^0.0.80",
+    "esbuild": "^0.27.2",
+    "npm-run-all2": "^8.0.4",
+    "path-browserify": "^1.0.1"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/CloudTronUSA/vsprocessing.git"
+    "url": "https://github.com/microsoft/vscode.git"
   }
 }

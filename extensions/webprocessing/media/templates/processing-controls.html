@@ -87,9 +87,15 @@
 				<option value="processing">Processing</option>
 				<option value="java">Java</option>
 			</select>
+			<select id="processingOutput" aria-label="Processing output">
+				<option value="auto">Auto</option>
+				<option value="wasm-gc">Wasm-GC</option>
+				<option value="js">JavaScript</option>
+			</select>
 			<button id="compile" type="button">Compile</button>
 			<button id="run" type="button">Run</button>
-		<button id="stop" class="secondary" type="button">Stop</button>
+			<button id="exportWebsite" type="button">Export Website</button>
+			<button id="stop" class="secondary" type="button">Stop</button>
 		<div id="status" class="status"></div>
 		<div id="warning" class="warning"></div>
 		<div class="references">
@@ -103,11 +109,13 @@
 			const buttons = {
 				compile: document.getElementById('compile'),
 				run: document.getElementById('run'),
+				exportWebsite: document.getElementById('exportWebsite'),
 				stop: document.getElementById('stop'),
 				processingReference: document.getElementById('processingReference'),
 				apcsaReference: document.getElementById('apcsaReference')
 			};
 			const mode = document.getElementById('mode');
+			const processingOutput = document.getElementById('processingOutput');
 			const status = document.getElementById('status');
 			const warning = document.getElementById('warning');
 			function setDisabled(element, disabled) {
@@ -131,8 +139,13 @@
 					mode.value = state.mode || 'processing';
 					mode.disabled = state.isCompiling || state.isRunning;
 				}
+				if (processingOutput) {
+					processingOutput.value = state.processingOutput || 'auto';
+					processingOutput.disabled = state.mode !== 'processing' || state.isCompiling || state.isRunning;
+				}
 				setDisabled(buttons.compile, !state.hasSources || state.isCompiling || state.isRunning);
 				setDisabled(buttons.run, !state.hasSources || !state.hasCompiled || state.isCompiling || state.isRunning);
+				setDisabled(buttons.exportWebsite, state.mode !== 'processing' || !state.hasSources || state.isCompiling || state.isRunning);
 				setDisabled(buttons.stop, !state.isRunning);
 				setText(status, state.status || '');
 				setText(warning, state.warning || '');
@@ -142,11 +155,15 @@
 		}
 			onClick(buttons.compile, () => vscode.postMessage({ type: 'compile' }));
 			onClick(buttons.run, () => vscode.postMessage({ type: 'run' }));
+			onClick(buttons.exportWebsite, () => vscode.postMessage({ type: 'exportWebsite' }));
 			onClick(buttons.stop, () => vscode.postMessage({ type: 'stop' }));
 			onClick(buttons.processingReference, () => vscode.postMessage({ type: 'openReference' }));
 			onClick(buttons.apcsaReference, () => vscode.postMessage({ type: 'openApcsaReference' }));
 			if (mode) {
 				mode.addEventListener('change', () => vscode.postMessage({ type: 'mode', mode: mode.value }));
+			}
+			if (processingOutput) {
+				processingOutput.addEventListener('change', () => vscode.postMessage({ type: 'processingOutput', output: processingOutput.value }));
 			}
 		window.addEventListener('message', event => {
 			if (event.data?.type === 'state') {

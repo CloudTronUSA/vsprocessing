@@ -4,4 +4,3 @@ tsconfig*.json
 esbuild*.mts
 *.tsbuildinfo
 node_modules/**
-lib/teavm-javac/example/**
