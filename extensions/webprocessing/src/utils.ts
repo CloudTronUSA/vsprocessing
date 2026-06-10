@@ -1,23 +1,42 @@
 import * as vscode from 'vscode';
 import type { ProcessingDiagnostic, ProcessingSketchTimings } from '../lib/teavm-javac/processing-teavm.js';
-import type { ProcessingPreprocessResult, ProcessingSource } from '../lib/teavm-javac/teavm-javac.js';
+import type { ProcessingPreprocessResult } from '../lib/teavm-javac/teavm-javac.js';
 
 declare const TextDecoder: {
 	new(): { decode(input?: Uint8Array): string };
 };
 
+export function getWorkspaceFolder(): vscode.WorkspaceFolder | undefined {
+	return vscode.workspace.workspaceFolders?.[0];
+}
+
+// handle sources
 export interface WorkspaceSource {
 	readonly uri: vscode.Uri;
 	readonly path: string;
 	readonly content: string;
 }
 
-export async function collectProcessingSources(root: vscode.Uri): Promise<ProcessingSource[]> {
-	return collectWorkspaceSources(root, '.pde');
+export type SourceKind = 'java' | 'processing';
+export type SourceOrigin = 'workspace' | 'tabs';
+
+export interface SourceCollection {
+	readonly kind: SourceKind;
+	readonly origin: SourceOrigin;
+	readonly workspaceFolders: readonly vscode.WorkspaceFolder[];
+	readonly sources: readonly WorkspaceSource[];
 }
 
-export async function collectJavaSources(root: vscode.Uri): Promise<WorkspaceSource[]> {
-	return collectWorkspaceSources(root, '.java');
+export async function collectSources(kind: SourceKind): Promise<SourceCollection> {
+	const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+	if (workspaceFolders.length) {
+		const sources: WorkspaceSource[] = [];
+		sources.push(...await collectWorkspaceSources(workspaceFolders[0].uri, sourceExtension(kind)));
+
+		return { kind, origin: 'workspace', workspaceFolders, sources };
+	}
+
+	return { kind, origin: 'tabs', workspaceFolders: [], sources: collectTabSources(kind) };
 }
 
 async function collectWorkspaceSources(root: vscode.Uri, extension: string): Promise<WorkspaceSource[]> {
@@ -43,51 +62,84 @@ async function collectWorkspaceSources(root: vscode.Uri, extension: string): Pro
 	return result;
 }
 
-export function compiledFileUri(workspaceFolder: vscode.WorkspaceFolder): vscode.Uri {
-	return vscode.Uri.joinPath(workspaceFolder.uri, compiledFileName(workspaceFolder));
-}
-
-export function compiledFileName(workspaceFolder: vscode.WorkspaceFolder): string {
-	return `${toFileBaseName(workspaceFolder.name, 'sketch')}.compiled.wasm`;
-}
-
-// check if any .pde file in the workspace folder is newer than the compiled file
-export async function isCompiledOutdated(workspaceFolder: vscode.WorkspaceFolder, compiledMtime: number): Promise<boolean> {
+function collectTabSources(kind: SourceKind): WorkspaceSource[] {
+	const sources: WorkspaceSource[] = [];
 	for (const document of vscode.workspace.textDocuments) {
-		if (document.isDirty && isProcessingUri(document.uri) && isInWorkspaceFolder(document.uri, workspaceFolder)) {
+		if (!isSourceUri(document.uri, kind)) {
+			continue;
+		}
+		sources.push({
+			uri: document.uri,
+			path: tabSourceName(document),
+			content: document.getText()
+		});
+	}
+	sources.sort((a, b) => a.path.localeCompare(b.path));
+	return sources;
+}
+
+function tabSourceName(document: vscode.TextDocument): string {
+	const path = document.uri.path.split('/').pop();
+	return path || document.fileName || `main${sourceExtension(isProcessingUri(document.uri) ? 'processing' : 'java')}`;
+}
+
+function sourceExtension(kind: SourceKind): string {
+	return kind === 'processing' ? '.pde' : '.java';
+}
+
+export function hasSources(kind: SourceKind): boolean {
+	const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+	if (workspaceFolders.length) {
+		return true;
+	}
+
+	return vscode.workspace.textDocuments.some(document => isSourceUri(document.uri, kind));
+}
+
+export function sourceVersions(sources: readonly WorkspaceSource[]): ReadonlyMap<string, number> {
+	const versions = new Map<string, number>();
+	for (const source of sources) {
+		const document = vscode.workspace.textDocuments.find(document => document.uri.toString() === source.uri.toString());
+		if (document) {
+			versions.set(source.uri.toString(), document.version);
+		}
+	}
+	return versions;
+}
+
+// we keep track of the sources that produced the artifact,
+// and compare current versions with the recorded ones to determine if the artifact is outdated.
+// the artifact is temporary so we can just use the in-memory version param.
+export function isTempBuildArtifactOutdated(versions: ReadonlyMap<string, number>): boolean {
+	for (const [uri, version] of versions) {
+		const document = vscode.workspace.textDocuments.find(document => document.uri.toString() === uri);
+		if (!document || document.version !== version) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// check if any .pde/.java file in the workspace folder is newer than the compiled file
+// artifact is on disk so we need to check the file modification times
+export async function isBuildArtifactOutdated(workspaceFolder: vscode.WorkspaceFolder, compiledMtime: number): Promise<boolean> {
+	for (const document of vscode.workspace.textDocuments) {
+		if (document.isDirty && isSourceUri(document.uri) && isInWorkspaceFolder(document.uri, workspaceFolder)) {
 			return true;
 		}
 	}
 
-	for (const uri of await collectProcessingUris(workspaceFolder.uri)) {
-		const stat = await statOrUndefined(uri);
-		if (stat && stat.mtime > compiledMtime) {
-			return true;
+	for (const kind of ['processing', 'java'] satisfies SourceKind[]) {
+		const collection = await collectSources(kind);
+		for (const source of collection.sources) {
+			const stat = await statOrUndefined(source.uri);
+			if (stat && stat.mtime > compiledMtime) {
+				return true;
+			}
 		}
 	}
 
 	return false;
-}
-
-async function collectProcessingUris(root: vscode.Uri): Promise<vscode.Uri[]> {
-	const result: vscode.Uri[] = [];
-	async function visit(folder: vscode.Uri): Promise<void> {
-		const entries = await vscode.workspace.fs.readDirectory(folder);
-		entries.sort(([a], [b]) => a.localeCompare(b));
-		for (const [name, type] of entries) {
-			const child = vscode.Uri.joinPath(folder, name);
-			if (type === vscode.FileType.Directory) {
-				if (name === '.git' || name === 'node_modules') {
-					continue;
-				}
-				await visit(child);
-			} else if (type === vscode.FileType.File && name.toLowerCase().endsWith('.pde')) {
-				result.push(child);
-			}
-		}
-	}
-	await visit(root);
-	return result;
 }
 
 export function isProcessingUri(uri: vscode.Uri): boolean {
@@ -98,6 +150,13 @@ export function isJavaUri(uri: vscode.Uri): boolean {
 	return uri.path.toLowerCase().endsWith('.java');
 }
 
+function isSourceUri(uri: vscode.Uri, kind?: SourceKind): boolean {
+	if (kind) {
+		return kind === 'processing' ? isProcessingUri(uri) : isJavaUri(uri);
+	}
+	return isProcessingUri(uri) || isJavaUri(uri);
+}
+
 export function isInWorkspaceFolder(uri: vscode.Uri, workspaceFolder: vscode.WorkspaceFolder): boolean {
 	if (uri.scheme !== workspaceFolder.uri.scheme || uri.authority !== workspaceFolder.uri.authority) {
 		return false;
@@ -106,12 +165,18 @@ export function isInWorkspaceFolder(uri: vscode.Uri, workspaceFolder: vscode.Wor
 	return uri.path === workspaceFolder.uri.path || uri.path.startsWith(folderPath);
 }
 
-export function identifyEntrypoint(sources: readonly ProcessingSource[], workspaceFolder: vscode.WorkspaceFolder): ProcessingSource | undefined {
-	const folderName = workspaceFolder.name.toLowerCase();
-	const candidates = [
-		`${folderName}.pde`,
-		'main.pde'
-	];
+export function identifyEntrypoint<T extends { readonly path?: string }>(sources: readonly T[], workspaceFolder?: vscode.WorkspaceFolder): T | undefined {
+	const candidates = workspaceFolder
+		? [
+			`${workspaceFolder.name.toLowerCase()}.pde`,
+			`${workspaceFolder.name.toLowerCase()}.java`,
+			'main.pde',
+			'main.java'
+		]
+		: [
+			'main.pde',
+			'main.java'
+		];
 
 	for (const candidate of candidates) {
 		const index = sources.findIndex(source => source.path?.toLowerCase() === candidate);
@@ -121,6 +186,14 @@ export function identifyEntrypoint(sources: readonly ProcessingSource[], workspa
 	}
 
 	return undefined;
+}
+
+export function buildArtifactFileUri(workspaceFolder: vscode.WorkspaceFolder): vscode.Uri {
+	return vscode.Uri.joinPath(workspaceFolder.uri, buildArtifactFileName(workspaceFolder));
+}
+
+export function buildArtifactFileName(workspaceFolder: vscode.WorkspaceFolder): string {
+	return `${toFileBaseName(workspaceFolder.name, 'sketch')}.compiled.wasm`;
 }
 
 export async function exists(uri: vscode.Uri): Promise<boolean> {
@@ -217,4 +290,15 @@ export function createNonce(): string {
 
 export function escapeScriptJson(value: string): string {
 	return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/</g, '\\u003C');
+}
+
+const templateDecoder = new TextDecoder();
+
+export async function readTemplate(extensionUri: vscode.Uri, name: string): Promise<string> {
+	const uri = vscode.Uri.joinPath(extensionUri, 'media', 'templates', name);
+	return templateDecoder.decode(await vscode.workspace.fs.readFile(uri));
+}
+
+export function renderTemplate(template: string, values: Record<string, string>): string {
+	return template.replace(/\{\{([a-zA-Z0-9]+)\}\}/g, (match, key: string) => values[key] ?? match);
 }
