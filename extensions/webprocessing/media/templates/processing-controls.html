@@ -5,6 +5,7 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<style>
 		html, body {
+			height: 100%;
 			margin: 0;
 			padding: 0;
 			background: transparent;
@@ -14,10 +15,18 @@
 		}
 		.controls {
 			box-sizing: border-box;
+			min-height: 100vh;
 			display: flex;
 			flex-direction: column;
 			gap: 6px;
 			padding: 8px 12px 10px;
+		}
+		.references {
+			display: flex;
+			flex-direction: column;
+			gap: 6px;
+			margin-top: auto;
+			padding-top: 8px;
 		}
 			button {
 				box-sizing: border-box;
@@ -83,6 +92,10 @@
 		<button id="stop" class="secondary" type="button">Stop</button>
 		<div id="status" class="status"></div>
 		<div id="warning" class="warning"></div>
+		<div class="references">
+			<button id="processingReference" class="secondary" type="button">Open Processing Reference</button>
+			<button id="apcsaReference" class="secondary" type="button">Open APCSA Reference</button>
+		</div>
 	</div>
 	<script nonce="{{nonce}}">
 		const vscode = acquireVsCodeApi();
@@ -90,26 +103,51 @@
 			const buttons = {
 				compile: document.getElementById('compile'),
 				run: document.getElementById('run'),
-				stop: document.getElementById('stop')
+				stop: document.getElementById('stop'),
+				processingReference: document.getElementById('processingReference'),
+				apcsaReference: document.getElementById('apcsaReference')
 			};
 			const mode = document.getElementById('mode');
 			const status = document.getElementById('status');
 			const warning = document.getElementById('warning');
+			function setDisabled(element, disabled) {
+				if (element) {
+					element.disabled = disabled;
+				}
+			}
+			function setText(element, text) {
+				if (element) {
+					element.textContent = text;
+				}
+			}
+			function onClick(element, callback) {
+				if (element) {
+					element.addEventListener('click', callback);
+				}
+			}
 			function applyState(next) {
 				Object.assign(state, next);
-				mode.value = state.mode || 'processing';
-				mode.disabled = state.isCompiling || state.isRunning;
-				buttons.compile.disabled = !state.hasSources || state.isCompiling || state.isRunning;
-				buttons.run.disabled = !state.hasSources || !state.hasCompiled || state.isCompiling || state.isRunning;
-				buttons.stop.disabled = !state.isRunning;
-				status.textContent = state.status || '';
-			warning.textContent = state.warning || '';
-			warning.hidden = !state.warning;
+				if (mode) {
+					mode.value = state.mode || 'processing';
+					mode.disabled = state.isCompiling || state.isRunning;
+				}
+				setDisabled(buttons.compile, !state.hasSources || state.isCompiling || state.isRunning);
+				setDisabled(buttons.run, !state.hasSources || !state.hasCompiled || state.isCompiling || state.isRunning);
+				setDisabled(buttons.stop, !state.isRunning);
+				setText(status, state.status || '');
+				setText(warning, state.warning || '');
+				if (warning) {
+					warning.hidden = !state.warning;
+				}
 		}
-			buttons.compile.addEventListener('click', () => vscode.postMessage({ type: 'compile' }));
-			buttons.run.addEventListener('click', () => vscode.postMessage({ type: 'run' }));
-			buttons.stop.addEventListener('click', () => vscode.postMessage({ type: 'stop' }));
-			mode.addEventListener('change', () => vscode.postMessage({ type: 'mode', mode: mode.value }));
+			onClick(buttons.compile, () => vscode.postMessage({ type: 'compile' }));
+			onClick(buttons.run, () => vscode.postMessage({ type: 'run' }));
+			onClick(buttons.stop, () => vscode.postMessage({ type: 'stop' }));
+			onClick(buttons.processingReference, () => vscode.postMessage({ type: 'openReference' }));
+			onClick(buttons.apcsaReference, () => vscode.postMessage({ type: 'openApcsaReference' }));
+			if (mode) {
+				mode.addEventListener('change', () => vscode.postMessage({ type: 'mode', mode: mode.value }));
+			}
 		window.addEventListener('message', event => {
 			if (event.data?.type === 'state') {
 				applyState(event.data.state);

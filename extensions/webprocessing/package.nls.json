@@ -1,10 +1,12 @@
 {
   "displayName": "Web Processing",
-  "description": "Compile and run Processing sketches in the browser.",
+  "description": "Write, compile and run Java/Processing code in the browser.",
   "container.title": "Processing",
   "view.controls.name": "Processing",
   "command.category": "Processing",
   "command.compile": "Compile",
   "command.run": "Run",
-  "command.stop": "Stop"
+  "command.stop": "Stop",
+  "command.openReference": "Open Processing Reference",
+  "command.openApcsaReference": "Open APCSA Reference"
 }

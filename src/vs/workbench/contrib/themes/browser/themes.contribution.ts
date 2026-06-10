@@ -691,10 +691,9 @@ function isItem(i: QuickPickInput<ThemeItem>): i is ThemeItem {
 	return (<any>i)['type'] !== 'separator';
 }
 
-const defaultThemeDescriptions: Record<string, string> = {
-	[ThemeSettingDefaults.COLOR_THEME_LIGHT]: localize('defaultLight', "Default Light"),
-	[ThemeSettingDefaults.COLOR_THEME_DARK]: localize('defaultDark', "Default Dark"),
-};
+const defaultThemeDescriptions: Record<string, string> = Object.create(null);
+defaultThemeDescriptions[ThemeSettingDefaults.COLOR_THEME_LIGHT] = localize('defaultLight', "Default Light");
+defaultThemeDescriptions[ThemeSettingDefaults.COLOR_THEME_DARK] = localize('defaultDark', "Default Dark");
 
 function toEntry(theme: IWorkbenchTheme): ThemeItem {
 	const settingId = theme.settingsId ?? undefined;

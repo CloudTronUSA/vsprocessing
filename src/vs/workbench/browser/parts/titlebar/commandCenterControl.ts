@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { isActiveDocument, reset } from '../../../../base/browser/dom.js';
+import { EventHelper, EventLike, isActiveDocument, reset } from '../../../../base/browser/dom.js';
 import { BaseActionViewItem, IBaseActionViewItemOptions } from '../../../../base/browser/ui/actionbar/actionViewItems.js';
 import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegateFactory.js';
 import { IHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegate.js';
@@ -20,6 +20,7 @@ import { MenuId, MenuRegistry, SubmenuItemAction } from '../../../../platform/ac
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
 import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
+import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { WindowTitle } from './windowTitle.js';
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
 import { IHoverService } from '../../../../platform/hover/browser/hover.js';
@@ -105,6 +106,7 @@ class CommandCenterCenterViewItem extends BaseActionViewItem {
 		@IInstantiationService private _instaService: IInstantiationService,
 		@IEditorGroupsService private _editorGroupService: IEditorGroupsService,
 		@IConfigurationService private _configurationService: IConfigurationService,
+		@ICommandService private _commandService: ICommandService,
 	) {
 		super(undefined, _submenu.actions.find(action => action.id === 'workbench.action.quickOpenWithModes') ?? _submenu.actions[0], options);
 		this._hoverDelegate = options.hoverDelegate ?? getDefaultHoverDelegate('mouse');
@@ -211,6 +213,11 @@ class CommandCenterCenterViewItem extends BaseActionViewItem {
 
 						protected override getTooltip() {
 							return that.getTooltip();
+						}
+
+						override onClick(event: EventLike): void {
+							EventHelper.stop(event, true);
+							that._commandService.executeCommand(CommandCenterCenterViewItem._quickOpenCommandId);
 						}
 
 						private _getLabel(): string {

@@ -19,6 +19,7 @@ const https = require('https');
 
 const APP_ROOT = path.join(__dirname, '..');
 const WEB_DEV_EXTENSIONS_ROOT = path.join(APP_ROOT, '.build', 'builtInWebDevExtensions');
+const ONE_DARK_PRO_ROOT = path.join(APP_ROOT, 'extensions', 'OneDark-Pro');
 
 const WEB_PLAYGROUND_VERSION = '0.0.13';
 
@@ -74,6 +75,8 @@ async function main() {
 		openSystemBrowser = true;
 	}
 
+	await ensureOneDarkProWebExtension(args['verbose']);
+
 	serverArgs.push('--sourcesPath', APP_ROOT);
 
 	serverArgs.push(...process.argv.slice(2).filter(v => !v.startsWith('--playground') && v !== '--no-playground'));
@@ -100,6 +103,43 @@ function startServer(runnerArguments) {
 	process.on('SIGTERM', () => {
 		proc.kill();
 		process.exit(128 + 15); // https://nodejs.org/docs/v14.16.0/api/process.html#process_signal_events
+	});
+}
+
+async function ensureOneDarkProWebExtension(verbose) {
+	const packageJsonPath = path.join(ONE_DARK_PRO_ROOT, 'package.json');
+	if (!fs.existsSync(packageJsonPath)) {
+		return;
+	}
+
+	const webpackPath = path.join(ONE_DARK_PRO_ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'webpack.cmd' : 'webpack');
+	if (!fs.existsSync(webpackPath)) {
+		await runProcess('npm', ['install', '--no-package-lock'], ONE_DARK_PRO_ROOT, verbose);
+	}
+
+	await runProcess('npm', ['run', 'package-web'], ONE_DARK_PRO_ROOT, verbose);
+}
+
+function runProcess(command, args, cwd, verbose) {
+	if (verbose) {
+		fancyLog(`${ansiColors.magenta('One Dark Pro')}: ${command} ${args.join(' ')}`);
+	}
+
+	return new Promise((resolve, reject) => {
+		const proc = cp.spawn(command, args, {
+			cwd,
+			stdio: 'inherit',
+			shell: process.platform === 'win32'
+		});
+
+		proc.on('error', reject);
+		proc.on('close', code => {
+			if (code === 0) {
+				resolve();
+			} else {
+				reject(new Error(`${command} ${args.join(' ')} failed with exit code ${code}`));
+			}
+		});
 	});
 }
 

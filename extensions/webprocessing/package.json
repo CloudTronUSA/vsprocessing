@@ -3,7 +3,7 @@
   "displayName": "%displayName%",
   "description": "%description%",
   "version": "10.0.0",
-  "publisher": "vscode",
+  "publisher": "CloudTronUSA",
   "license": "MIT",
   "engines": {
     "vscode": "^1.100.0"
@@ -29,7 +29,9 @@
     "onView:webprocessing.controls",
     "onCommand:webprocessing.compile",
     "onCommand:webprocessing.run",
-    "onCommand:webprocessing.stop"
+    "onCommand:webprocessing.stop",
+    "onCommand:webprocessing.openReference",
+    "onCommand:webprocessing.openApcsaReference"
   ],
   "contributes": {
     "languages": [
@@ -74,6 +76,18 @@
         "title": "%command.stop%",
         "category": "%command.category%",
         "icon": "$(debug-stop)"
+      },
+      {
+        "command": "webprocessing.openReference",
+        "title": "%command.openReference%",
+        "category": "%command.category%",
+        "icon": "$(references)"
+      },
+      {
+        "command": "webprocessing.openApcsaReference",
+        "title": "%command.openApcsaReference%",
+        "category": "%command.category%",
+        "icon": "$(references)"
       }
     ],
     "menus": {
@@ -89,6 +103,12 @@
         {
           "command": "webprocessing.stop",
           "when": "webprocessing.isRunning"
+        },
+        {
+          "command": "webprocessing.openReference"
+        },
+        {
+          "command": "webprocessing.openApcsaReference"
         }
       ]
     }
@@ -108,6 +128,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/microsoft/vscode.git"
+    "url": "https://github.com/CloudTronUSA/vsprocessing.git"
   }
 }

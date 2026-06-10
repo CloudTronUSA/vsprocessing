@@ -14,8 +14,11 @@ declare function setTimeout(handler: (...args: unknown[]) => void, timeout?: num
 const compileCommand = 'webprocessing.compile';
 const runCommand = 'webprocessing.run';
 const stopCommand = 'webprocessing.stop';
+const openReferenceCommand = 'webprocessing.openReference';
+const openApcsaReferenceCommand = 'webprocessing.openApcsaReference';
 const controlsViewType = 'webprocessing.controls';
 const runtimeViewType = 'webruntime';
+const referenceViewType = 'webprocessing.reference';
 const defaultOpenStateKey = 'webprocessing.defaultOpen.v1';
 
 type ProcessingModule = typeof import('../lib/teavm-javac/processing-teavm.js');
@@ -58,6 +61,7 @@ class Extension implements vscode.Disposable {
 	private readonly controlsProvider: ExtensionControlsProvider;	// control panel
 	private readonly linter: ProcessingLinter;
 	private runtimePanel: ProcessingRuntimePanel | undefined;	// runtime panel
+	private referencePanel: ProcessingReferencePanel | undefined;
 	private javaRuntimeWorker: Worker | undefined;
 	private javaRuntimeRunId = 0;
 	private mode: SourceKind = 'processing';
@@ -79,6 +83,8 @@ class Extension implements vscode.Disposable {
 		this.disposables.push(vscode.commands.registerCommand(compileCommand, () => this.compile()));
 		this.disposables.push(vscode.commands.registerCommand(runCommand, () => this.run()));
 		this.disposables.push(vscode.commands.registerCommand(stopCommand, () => this.stop()));
+		this.disposables.push(vscode.commands.registerCommand(openReferenceCommand, () => this.openReference()));
+		this.disposables.push(vscode.commands.registerCommand(openApcsaReferenceCommand, () => this.openApcsaReference()));
 		// events
 		this.disposables.push(vscode.workspace.onDidChangeWorkspaceFolders(() => this.refreshState()));
 		this.disposables.push(vscode.workspace.onDidOpenTextDocument(() => this.refreshState()));
@@ -96,6 +102,7 @@ class Extension implements vscode.Disposable {
 			disposable.dispose();
 		}
 		this.runtimePanel?.dispose();
+		this.referencePanel?.dispose();
 	}
 
 	getState(): ExtensionState {
@@ -421,6 +428,23 @@ class Extension implements vscode.Disposable {
 		this.setRunning(false);
 	}
 
+	async openReference(): Promise<void> {
+		await this.openReferencePanel('Processing Reference', 'https://processing.org/reference/');
+	}
+
+	async openApcsaReference(): Promise<void> {
+		await this.openReferencePanel('APCSA Reference', vscode.Uri.joinPath(this.context.extensionUri, 'media', 'reference', 'ap-computer-science-a-java-quick-reference.html'));
+	}
+
+	private async openReferencePanel(title: string, source: string | vscode.Uri): Promise<void> {
+		if (!this.referencePanel) {
+			this.referencePanel = new ProcessingReferencePanel(this.context.extensionUri, () => {
+				this.referencePanel = undefined;
+			});
+		}
+		await this.referencePanel.open(title, source);
+	}
+
 	private handleJavaRuntimeMessage(runId: number, message: { readonly type?: string; readonly text?: string }): void {
 		if (runId !== this.javaRuntimeRunId) {
 			return;
@@ -533,6 +557,8 @@ type controlsMessage =
 	| { readonly type: 'compile' }
 	| { readonly type: 'run' }
 	| { readonly type: 'stop' }
+	| { readonly type: 'openReference' }
+	| { readonly type: 'openApcsaReference' }
 	| { readonly type: 'mode'; readonly mode: SourceKind };
 
 // stuff in left side bar
@@ -564,6 +590,12 @@ class ExtensionControlsProvider implements vscode.WebviewViewProvider {
 				break;
 			case 'stop':
 				this.controller.stop();
+				break;
+			case 'openReference':
+				void this.controller.openReference();
+				break;
+			case 'openApcsaReference':
+				void this.controller.openApcsaReference();
 				break;
 			case 'mode':
 				this.controller.setMode(message.mode);
@@ -667,6 +699,45 @@ class ProcessingRuntimePanel implements vscode.Disposable {
 			processingUri: this.panel.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'lib', 'teavm-javac', 'processing-teavm.js')).toString()
 		}));
 		return renderTemplate(await readTemplate(this.extensionUri, 'processing-runtime.html'), {
+			nonce,
+			payload,
+			cspSource: this.panel.webview.cspSource
+		});
+	}
+}
+
+class ProcessingReferencePanel implements vscode.Disposable {
+	private readonly panel: vscode.WebviewPanel;
+
+	constructor(
+		private readonly extensionUri: vscode.Uri,
+		onDispose: () => void
+	) {
+		this.panel = vscode.window.createWebviewPanel(referenceViewType, 'Reference', vscode.ViewColumn.Beside, {
+			enableScripts: true,
+			retainContextWhenHidden: true,
+			localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'media')]
+		});
+		this.panel.onDidDispose(onDispose);
+	}
+
+	dispose(): void {
+		this.panel.dispose();
+	}
+
+	async open(title: string, source: string | vscode.Uri): Promise<void> {
+		this.panel.title = title;
+		this.panel.reveal(vscode.ViewColumn.Beside);
+		this.panel.webview.html = await this.getHtml(title, source);
+	}
+
+	private async getHtml(title: string, source: string | vscode.Uri): Promise<string> {
+		const nonce = createNonce();
+		const payload = escapeScriptJson(JSON.stringify({
+			title,
+			url: typeof source === 'string' ? source : this.panel.webview.asWebviewUri(source).toString()
+		}));
+		return renderTemplate(await readTemplate(this.extensionUri, 'processing-reference.html'), {
 			nonce,
 			payload,
 			cspSource: this.panel.webview.cspSource

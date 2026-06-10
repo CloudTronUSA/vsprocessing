@@ -1,0 +1,3 @@
+[submodule "extensions/OneDark-Pro"]
+	path = extensions/OneDark-Pro
+	url = https://github.com/Binaryify/OneDark-Pro
