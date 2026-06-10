@@ -70,6 +70,11 @@ export interface IUntitledTextEditorModel extends ITextEditorModel, ILanguageSup
 	 * Whether this model is resolved or not.
 	 */
 	isResolved(): this is IResolvedUntitledTextEditorModel;
+
+	/**
+	 * Marks the model as saved without changing its resource.
+	 */
+	markSaved(): void;
 }
 
 export interface IResolvedUntitledTextEditorModel extends IUntitledTextEditorModel {
@@ -81,6 +86,7 @@ export class UntitledTextEditorModel extends BaseTextEditorModel implements IUnt
 
 	private static readonly FIRST_LINE_NAME_MAX_LENGTH = 40;
 	private static readonly FIRST_LINE_NAME_CANDIDATE_MAX_LENGTH = this.FIRST_LINE_NAME_MAX_LENGTH * 10;
+	private static readonly UNTITLED_NAME_REGEX = /^\/?Untitled-\d+$/;
 
 	// Support the special '${activeEditorLanguage}' language by
 	// looking up the language id from the editor that is active
@@ -125,12 +131,16 @@ export class UntitledTextEditorModel extends BaseTextEditorModel implements IUnt
 		// Take name from first line if present and only if
 		// we have no associated file path. In that case we
 		// prefer the file name as title.
-		if (this.configuredLabelFormat === 'content' && !this.hasAssociatedFilePath && this.cachedModelFirstLineWords) {
+		if (this.configuredLabelFormat === 'content' && !this.hasAssociatedFilePath && !this.hasExplicitResourceName && this.cachedModelFirstLineWords) {
 			return this.cachedModelFirstLineWords;
 		}
 
 		// Otherwise fallback to resource
 		return this.labelService.getUriBasenameLabel(this.resource);
+	}
+
+	private get hasExplicitResourceName(): boolean {
+		return !!this.resource.path && !UntitledTextEditorModel.UNTITLED_NAME_REGEX.test(this.resource.path);
 	}
 
 	//#endregion
@@ -266,6 +276,10 @@ export class UntitledTextEditorModel extends BaseTextEditorModel implements IUnt
 
 		this.dirty = dirty;
 		this._onDidChangeDirty.fire();
+	}
+
+	markSaved(): void {
+		this.setDirty(false);
 	}
 
 	//#endregion

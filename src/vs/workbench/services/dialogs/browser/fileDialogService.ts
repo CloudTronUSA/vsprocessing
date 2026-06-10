@@ -60,7 +60,7 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
 
 		const activeWindow = getActiveWindow();
 		if (!WebFileSystemAccess.supported(activeWindow)) {
-			return this.showUnsupportedBrowserWarning('open');
+			return this.uploadFilesAndOpen();
 		}
 
 		let fileHandle: FileSystemHandle | undefined = undefined;
@@ -190,6 +190,11 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
 
 		const activeWindow = getActiveWindow();
 		if (!WebFileSystemAccess.supported(activeWindow)) {
+			if (options.canSelectFiles) {
+				await this.uploadFilesAndOpen();
+				return undefined;
+			}
+
 			return this.showUnsupportedBrowserWarning('open');
 		}
 
@@ -240,19 +245,7 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
 			buttons.push({
 				label: localize({ key: 'openFiles', comment: ['&& denotes a mnemonic'] }, "Open &&Files..."),
 				run: async () => {
-					const files = await triggerUpload();
-					if (files) {
-						const filesData = (await this.instantiationService.invokeFunction(accessor => extractFileListData(accessor, files))).filter(fileData => !fileData.isDirectory);
-						if (filesData.length > 0) {
-							this.editorService.openEditors(filesData.map(fileData => {
-								return {
-									resource: fileData.resource,
-									contents: fileData.contents?.toString(),
-									options: { pinned: true }
-								};
-							}));
-						}
-					}
+					await this.uploadFilesAndOpen();
 				}
 			});
 		}
@@ -265,6 +258,26 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
 		});
 
 		return undefined;
+	}
+
+	private async uploadFilesAndOpen(): Promise<void> {
+		const files = await triggerUpload();
+		if (!files) {
+			return;
+		}
+
+		const filesData = (await this.instantiationService.invokeFunction(accessor => extractFileListData(accessor, files))).filter(fileData => !fileData.isDirectory);
+		if (filesData.length === 0) {
+			return;
+		}
+
+		await this.editorService.openEditors(filesData.map(fileData => {
+			return {
+				resource: fileData.resource,
+				contents: fileData.contents?.toString(),
+				options: { pinned: true }
+			};
+		}));
 	}
 
 	private shouldUseSimplified(scheme: string): boolean {

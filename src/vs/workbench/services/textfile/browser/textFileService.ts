@@ -43,6 +43,9 @@ import { IDecorationData, IDecorationsProvider, IDecorationsService } from '../.
 import { Emitter } from '../../../../base/common/event.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { listErrorForeground } from '../../../../platform/theme/common/colorRegistry.js';
+import { triggerDownload } from '../../../../base/browser/dom.js';
+import { mainWindow } from '../../../../base/browser/window.js';
+import { WebFileSystemAccess } from '../../../../platform/files/browser/webFileSystemAccess.js';
 
 export abstract class AbstractTextFileService extends Disposable implements ITextFileService {
 
@@ -363,7 +366,15 @@ export abstract class AbstractTextFileService extends Disposable implements ITex
 
 				// Otherwise ask user
 				else {
-					targetUri = await this.fileDialogService.pickFileToSave(await this.suggestSavePath(resource), options?.availableFileSystems);
+					targetUri = await this.suggestSavePath(resource);
+					if (!WebFileSystemAccess.supported(mainWindow) && model.isResolved()) {
+						triggerDownload(VSBuffer.fromString(model.textEditorModel.getValue()).buffer, basename(targetUri));
+						model.markSaved();
+
+						return resource;
+					}
+
+					targetUri = await this.fileDialogService.pickFileToSave(targetUri, options?.availableFileSystems);
 				}
 
 				// Save as if target provided
@@ -388,6 +399,10 @@ export abstract class AbstractTextFileService extends Disposable implements ITex
 
 		// Get to target resource
 		if (!target) {
+			if (source.scheme === Schemas.untitled && !WebFileSystemAccess.supported(mainWindow)) {
+				return this.save(source, options);
+			}
+
 			target = await this.fileDialogService.pickFileToSave(await this.suggestSavePath(options?.suggestedTarget ?? source), options?.availableFileSystems);
 		}
 

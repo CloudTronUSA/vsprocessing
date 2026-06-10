@@ -61,6 +61,7 @@ export class ProcessingLinter implements vscode.Disposable {
 	private pendingJava = false;
 	private pendingProcessing = false;
 	private readonly javaUris = new Set<string>();
+	private readonly javaJdtUris = new Map<string, string>();
 	private readonly processingUris = new Set<string>();
 
 	constructor(private readonly context: vscode.ExtensionContext) {
@@ -162,6 +163,7 @@ export class ProcessingLinter implements vscode.Disposable {
 	private async lintJava(): Promise<void> {
 		const sources = await this.collectJavaWorkspaceSources();
 		const currentUris = new Set(sources.map(source => source.uri.toString()));
+		const sourceByJdtUri = new Map<string, string>();
 		let lastMessages: readonly PublishDiagnosticsMessage[] = [];
 		const jdt = sources.length > 0 || this.javaUris.size > 0 ? await this.loadJdtWasm() : undefined;
 
@@ -170,7 +172,7 @@ export class ProcessingLinter implements vscode.Disposable {
 				lastMessages = this.parseMessages(jdt.handle(JSON.stringify({
 					jsonrpc: '2.0',
 					method: 'java/browserJdtLs/removeWorkspaceSource',
-					params: { uri }
+					params: { uri: this.javaJdtUris.get(uri) ?? uri }
 				})));
 				this.diagnostics.delete(vscode.Uri.parse(uri));
 			}
@@ -180,11 +182,13 @@ export class ProcessingLinter implements vscode.Disposable {
 		}
 
 		for (const source of sources) {
+			const jdtUri = this.jdtSourceUri(source);
+			sourceByJdtUri.set(jdtUri, source.uri.toString());
 			lastMessages = this.parseMessages(jdt.handle(JSON.stringify({
 				jsonrpc: '2.0',
 				method: 'java/browserJdtLs/workspaceSources',
 				params: {
-					uri: source.uri.toString(),
+					uri: jdtUri,
 					text: source.content
 				}
 			})));
@@ -195,11 +199,15 @@ export class ProcessingLinter implements vscode.Disposable {
 				this.diagnostics.delete(vscode.Uri.parse(uri));
 			}
 		} else {
-			this.applyPublishDiagnostics(lastMessages);
+			this.applyPublishDiagnostics(lastMessages, sourceByJdtUri);
 		}
 		this.javaUris.clear();
+		this.javaJdtUris.clear();
 		for (const uri of currentUris) {
 			this.javaUris.add(uri);
+		}
+		for (const source of sources) {
+			this.javaJdtUris.set(source.uri.toString(), this.jdtSourceUri(source));
 		}
 	}
 
@@ -242,14 +250,13 @@ export class ProcessingLinter implements vscode.Disposable {
 
 	private async collectJavaWorkspaceSources(): Promise<WorkspaceSource[]> {
 		const sources = [...(await collectSources('java')).sources];
-		const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
 
 		for (const document of vscode.workspace.textDocuments) {
 			if (!isJavaUri(document.uri)) {
 				continue;
 			}
 			const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
-			if (!workspaceFolder && workspaceFolders.length > 0) {
+			if (!workspaceFolder) {
 				continue;
 			}
 			this.upsertSource(sources, {
@@ -322,13 +329,18 @@ export class ProcessingLinter implements vscode.Disposable {
 		}
 	}
 
-	private applyPublishDiagnostics(messages: readonly PublishDiagnosticsMessage[]): void {
+	private applyPublishDiagnostics(messages: readonly PublishDiagnosticsMessage[], uriMap?: ReadonlyMap<string, string>): void {
 		for (const message of messages) {
 			if (message.method !== 'textDocument/publishDiagnostics' || !message.params?.uri) {
 				continue;
 			}
-			this.diagnostics.set(vscode.Uri.parse(message.params.uri), (message.params.diagnostics ?? []).map(diagnostic => this.toDiagnostic(diagnostic)));
+			const uri = uriMap?.get(message.params.uri) ?? message.params.uri;
+			this.diagnostics.set(vscode.Uri.parse(uri), (message.params.diagnostics ?? []).map(diagnostic => this.toDiagnostic(diagnostic)));
 		}
+	}
+
+	private jdtSourceUri(source: WorkspaceSource): string {
+		return vscode.workspace.getWorkspaceFolder(source.uri) ? source.uri.toString() : source.path;
 	}
 
 	private toDiagnostic(diagnostic: LspDiagnostic): vscode.Diagnostic {
