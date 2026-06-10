@@ -1,41 +1,81 @@
-# Visual Studio Code + Processing
+# VS Processing
 
 ## The Repository
 
-This repository ("`Code - OSS`") is where we (Microsoft) develop the [Visual Studio Code](https://code.visualstudio.com) product together with the community. Not only do we work on code and issues here, but we also publish our [roadmap](https://github.com/microsoft/vscode/wiki/Roadmap), [monthly iteration plans](https://github.com/microsoft/vscode/wiki/Iteration-Plans), and our [endgame plans](https://github.com/microsoft/vscode/wiki/Running-the-Endgame). This source code is available to everyone under the standard [MIT license](https://github.com/microsoft/vscode/blob/main/LICENSE.txt).
+**VS Processing** is a fork of [Code - OSS](https://github.com/microsoft/vscode) customized to deliver a near-native browser-based development experience. It adds support for writing, compiling, and running Processing Java code directly in the browser. This version is designed specifically for Advanced Placement Computer Science A (AP CSA) classrooms, enabling students to develop and run Java/Processing programs without installing any local software.
 
-Added Processing JAVA. Built for the AP CSA class.
+*VS Processing and its development team are not affiliated with, endorsed by, or sponsored by the Processing Foundation, the College Board, or Microsoft Corporation.*
 
-## Visual Studio Code
+**Try it out in your browser: [VS Processing](https://vsp.cloudtron.us)**
 
-<p align="center">
-  <img alt="VS Code in action" src="https://github.com/user-attachments/assets/56af271c-949d-454c-a3ea-16188c063414">
-</p>
+## Compatibility
 
-[Visual Studio Code](https://code.visualstudio.com) is a distribution of the `Code - OSS` repository with Microsoft-specific customizations released under a traditional [Microsoft product license](https://code.visualstudio.com/License/).
+VS Processing is designed for the latest versions of Chromium-based, Firefox-based, and Safari-based browsers. It has been tested on Chrome, Firefox, and Safari for macOS.
 
-[Visual Studio Code](https://code.visualstudio.com) combines the simplicity of a code editor with what developers need for their core edit-build-debug cycle. It provides comprehensive code editing, navigation, and understanding support along with lightweight debugging, a rich extensibility model, and lightweight integration with existing tools.
+Mobile devices are not currently supported, although VS Processing should run on iPads.
 
-Visual Studio Code is updated monthly with new features and bug fixes. You can download it for Windows, macOS, and Linux on [Visual Studio Code's website](https://code.visualstudio.com/Download). To get the latest releases every day, install the [Insiders build](https://code.visualstudio.com/insiders).
+For the best experience, we recommend using a Chromium-based browser. Chromium browsers support the File System Access API, which allows users to open folders and save files directly to their local file system. Firefox and Safari do not currently provide full support for this API, so users on those browsers may be unable to open folders or save content directly to local storage.
 
 ## Bundled Extensions
 
-VS Code includes a set of built-in extensions located in the [extensions](extensions) folder, including grammars and snippets for many languages. Extensions that provide rich language support (inline suggestions, Go to Definition) for a language have the suffix `language-features`. For example, the `json` extension provides coloring for `JSON` and the `json-language-features` extension provides rich language support for `JSON`.
+The original [Code - OSS](https://github.com/microsoft/vscode) includes a set of built-in extensions located in the [extensions](extensions) folder, including grammars and snippets for many languages. Extensions that provide rich language support (inline suggestions, Go to Definition) for a language have the suffix `language-features`. For example, the `json` extension provides coloring for `JSON` and the `json-language-features` extension provides rich language support for `JSON`.
+
+VS Processing adds a new `webprocessing` extension that enables users to write, compile, and run Java/Processing code directly in the browser.<br>
+The extension uses a modified version of TeaVM as its compiler: [WorldEditAxe/teavm-javac](https://github.com/WorldEditAxe/teavm-javac)<br>
+It also uses a modified version of Eclipse JDT Language Server for linting: [CloudTronUSA/eclipse.jdt.ls-web](https://github.com/CloudTronUSA/eclipse.jdt.ls-web)
 
 ## Usage
 
-Setup the project:
-1. Have python 3 and nodejs installed. Select the correct version of nodejs with ```fnm use```
-2. Have other build dependencies installed. On linux, use `sudo apt-get install build-essential g++ libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev python-is-python3`
-3. Do `npm install`
+### Project setup
 
-Run dev server (web):
-1. in one terminal session, run ```npm run watch```
-2. in another session, run ```npm run watch-web```
-3. lastly run ```./scripts/code-web.sh```
+1. Install Python 3 and Node.js.
+
+2. Select the correct Node.js version:
+   ```bash
+   fnm use
+   ```
+
+3. Install the required build dependencies.
+   On Linux, run:
+   ```bash
+   sudo apt-get install build-essential g++ libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev python-is-python3
+   ```
+
+4. Install npm dependencies:
+   ```bash
+   npm install
+   ```
+
+### Run the development server for web
+
+1. In one terminal session, start the watcher:
+   ```bash
+   npm run watch
+   ```
+
+2. In a second terminal session, start the web watcher:
+   ```bash
+   npm run watch-web
+   ```
+
+3. In a third terminal session, start VS Processing for the web:
+   ```bash
+   ./scripts/code-web.sh
+   ```
+
+### Build the production bundle
+
+Run the following command:
+
+```bash
+npm run gulp vscode-web-min --max-old-space-size=49152
+```
+Note: This build requires approximately 30 GB of RAM.
+
+After the production bundle is built, refer to the [deployment repository](https://github.com/CloudTronUSA/vsprocessing-deploy.git) for the next steps.
 
 ## License
 
-Copyright (c) Microsoft Corporation. All rights reserved.
+VS Processing is a fork of Code - OSS, which is copyright Microsoft Corporation and licensed under the [MIT](LICENSE.txt) License.
 
-Licensed under the [MIT](LICENSE.txt) license.
+Modifications made for VS Processing are copyright the VS Processing contributors and are also licensed under the [MIT](LICENSE.txt) License, unless otherwise noted.
