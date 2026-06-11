@@ -33,7 +33,11 @@
     "onCommand:webprocessing.exportWebsite",
     "onCommand:webprocessing.openReference",
     "onCommand:webprocessing.openApcsaReference",
-    "onCommand:webprocessing.openReferenceSheet"
+    "onCommand:webprocessing.openReferenceSheet",
+    "onCommand:webprocessing.runAssignmentTests",
+    "onCommand:webprocessing.openTestReport",
+    "onCommand:webprocessing.createAssignment",
+    "onCommand:webprocessing.editAssignment"
   ],
   "contributes": {
     "languages": [
@@ -124,17 +128,41 @@
         "title": "%command.openReferenceSheet%",
         "category": "%command.category%",
         "icon": "$(references)"
+      },
+      {
+        "command": "webprocessing.runAssignmentTests",
+        "title": "%command.runAssignmentTests%",
+        "category": "%command.category%",
+        "icon": "$(run)"
+      },
+      {
+        "command": "webprocessing.openTestReport",
+        "title": "%command.openTestReport%",
+        "category": "%command.category%",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "webprocessing.createAssignment",
+        "title": "%command.createAssignment%",
+        "category": "%command.category%",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "webprocessing.editAssignment",
+        "title": "%command.editAssignment%",
+        "category": "%command.category%",
+        "icon": "$(edit)"
       }
     ],
     "menus": {
       "commandPalette": [
         {
           "command": "webprocessing.compile",
-          "when": "workspaceFolderCount != 0 && !webprocessing.isCompiling && !webprocessing.isRunning"
+          "when": "workspaceFolderCount != 0 && !webprocessing.assignment_mode && !webprocessing.isCompiling && !webprocessing.isRunning"
         },
         {
           "command": "webprocessing.run",
-          "when": "webprocessing.hasCompiled && !webprocessing.isCompiling && !webprocessing.isRunning"
+          "when": "webprocessing.hasCompiled && !webprocessing.assignment_mode && !webprocessing.isCompiling && !webprocessing.isRunning"
         },
         {
           "command": "webprocessing.stop",
@@ -142,7 +170,7 @@
         },
         {
           "command": "webprocessing.exportWebsite",
-          "when": "workspaceFolderCount != 0 && !webprocessing.isCompiling && !webprocessing.isRunning"
+          "when": "workspaceFolderCount != 0 && !webprocessing.assignment_mode && !webprocessing.isCompiling && !webprocessing.isRunning"
         },
         {
           "command": "webprocessing.openReference"
@@ -152,6 +180,22 @@
         },
         {
           "command": "webprocessing.openReferenceSheet"
+        },
+        {
+          "command": "webprocessing.runAssignmentTests",
+          "when": "workspaceFolderCount != 0 && webprocessing.assignment_mode && !webprocessing.isCompiling && !webprocessing.isRunning"
+        },
+        {
+          "command": "webprocessing.openTestReport",
+          "when": "webprocessing.assignment_mode"
+        },
+        {
+          "command": "webprocessing.createAssignment",
+          "when": "workspaceFolderCount != 0 && !webprocessing.assignment_mode && !webprocessing.isCompiling && !webprocessing.isRunning"
+        },
+        {
+          "command": "webprocessing.editAssignment",
+          "when": "webprocessing.assignment_mode && !webprocessing.isCompiling && !webprocessing.isRunning"
         }
       ]
     },
@@ -181,8 +225,10 @@
     "dev:web": "npm run build-web && npm-run-all2 -lp watch-web serve-web"
   },
   "dependencies": {
+    "@noble/ciphers": "^2.2.0",
+    "@noble/hashes": "^2.2.0",
     "@types/node": "^25.9.2",
-	    "@worldeditaxe/teavm-javac": "https://github.com/WorldEditAxe/teavm-javac/releases/download/v0.1.1/teavm-javac-0.1.1.tgz",
+    "@worldeditaxe/teavm-javac": "https://github.com/WorldEditAxe/teavm-javac/releases/download/v0.1.2/teavm-javac-0.1.2.tgz",
     "eclipse-jdt-ls-web": "https://github.com/CloudTronUSA/eclipse.jdt.ls-web/releases/download/v0.1.1/eclipse-jdt-ls-web-1.59.0-SNAPSHOT.tgz",
     "pdfjs-dist": "^6.0.227"
   },

@@ -5,6 +5,10 @@ import { createNonce, escapeScriptJson, readTemplate, renderTemplate, type Sourc
 type ControlsMessage =
 	| { readonly type: 'compile' }
 	| { readonly type: 'run' }
+	| { readonly type: 'runAssignmentTests' }
+	| { readonly type: 'openTestReport' }
+	| { readonly type: 'createAssignment' }
+	| { readonly type: 'editAssignment' }
 	| { readonly type: 'exportWebsite' }
 	| { readonly type: 'stop' }
 	| { readonly type: 'openReference' }
@@ -39,6 +43,18 @@ export class ExtensionControlsProvider implements vscode.WebviewViewProvider {
 			case 'run':
 				void this.controller.run();
 				break;
+			case 'runAssignmentTests':
+				void this.controller.runAssignmentTests();
+				break;
+			case 'openTestReport':
+				void this.controller.openTestReport();
+				break;
+			case 'createAssignment':
+				void this.controller.createAssignment();
+				break;
+			case 'editAssignment':
+				void this.controller.editAssignment();
+				break;
 			case 'exportWebsite':
 				void this.controller.exportWebsite();
 				break;
@@ -62,7 +78,13 @@ export class ExtensionControlsProvider implements vscode.WebviewViewProvider {
 
 	private getViewState(): ExtensionControlsViewState {
 		const state = this.controller.getState();
-		const status = !state.hasSources
+		const status = state.assignment_mode
+			? state.isCompiling
+				? 'Compiling assignment...'
+				: state.isRunning
+					? 'Running assignment tests...'
+					: 'Autograded assignment mode.'
+			: !state.hasSources
 			? `Open a ${state.mode === 'processing' ? 'Processing' : 'Java'} source file.`
 			: state.isCompiling
 				? 'Compiling sketch...'

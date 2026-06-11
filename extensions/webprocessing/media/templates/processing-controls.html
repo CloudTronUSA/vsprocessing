@@ -92,9 +92,17 @@
 				<option value="wasm-gc">Wasm-GC</option>
 				<option value="js">JavaScript</option>
 			</select>
-			<button id="compile" type="button">Compile</button>
-			<button id="run" type="button">Run</button>
-			<button id="exportWebsite" type="button">Export Website</button>
+			<div id="normalControls">
+				<button id="compile" type="button">Compile</button>
+				<button id="run" type="button">Run</button>
+				<button id="exportWebsite" type="button">Export Website</button>
+			</div>
+			<div id="assignmentControls">
+				<button id="runAssignmentTests" type="button">Run Assignment Tests</button>
+				<button id="openTestReport" class="secondary" type="button">Open Test Case Report</button>
+				<button id="editAssignment" class="secondary" type="button">Edit Autograded Assignment</button>
+			</div>
+			<button id="createAssignment" class="secondary" type="button">Create Autograded Assignment</button>
 			<button id="stop" class="secondary" type="button">Stop</button>
 		<div id="status" class="status"></div>
 		<div id="warning" class="warning"></div>
@@ -109,11 +117,17 @@
 			const buttons = {
 				compile: document.getElementById('compile'),
 				run: document.getElementById('run'),
+				runAssignmentTests: document.getElementById('runAssignmentTests'),
+				openTestReport: document.getElementById('openTestReport'),
+				createAssignment: document.getElementById('createAssignment'),
+				editAssignment: document.getElementById('editAssignment'),
 				exportWebsite: document.getElementById('exportWebsite'),
 				stop: document.getElementById('stop'),
 				processingReference: document.getElementById('processingReference'),
 				apcsaReference: document.getElementById('apcsaReference')
 			};
+			const normalControls = document.getElementById('normalControls');
+			const assignmentControls = document.getElementById('assignmentControls');
 			const mode = document.getElementById('mode');
 			const processingOutput = document.getElementById('processingOutput');
 			const status = document.getElementById('status');
@@ -137,14 +151,20 @@
 				Object.assign(state, next);
 				if (mode) {
 					mode.value = state.mode || 'processing';
-					mode.disabled = state.isCompiling || state.isRunning;
+					mode.disabled = state.assignment_mode || state.isCompiling || state.isRunning;
 				}
 				if (processingOutput) {
 					processingOutput.value = state.processingOutput || 'auto';
-					processingOutput.disabled = state.mode !== 'processing' || state.isCompiling || state.isRunning;
+					processingOutput.disabled = state.assignment_mode || state.mode !== 'processing' || state.isCompiling || state.isRunning;
 				}
+				if (normalControls) normalControls.hidden = !!state.assignment_mode;
+				if (assignmentControls) assignmentControls.hidden = !state.assignment_mode;
 				setDisabled(buttons.compile, !state.hasSources || state.isCompiling || state.isRunning);
 				setDisabled(buttons.run, !state.hasSources || !state.hasCompiled || state.isCompiling || state.isRunning);
+				setDisabled(buttons.runAssignmentTests, !state.assignment_mode || state.isCompiling || state.isRunning);
+				setDisabled(buttons.openTestReport, !state.assignment_mode);
+				setDisabled(buttons.createAssignment, state.assignment_mode || state.isCompiling || state.isRunning);
+				setDisabled(buttons.editAssignment, !state.assignment_mode || state.isCompiling || state.isRunning);
 				setDisabled(buttons.exportWebsite, state.mode !== 'processing' || !state.hasSources || state.isCompiling || state.isRunning);
 				setDisabled(buttons.stop, !state.isRunning);
 				setText(status, state.status || '');
@@ -155,6 +175,10 @@
 		}
 			onClick(buttons.compile, () => vscode.postMessage({ type: 'compile' }));
 			onClick(buttons.run, () => vscode.postMessage({ type: 'run' }));
+			onClick(buttons.runAssignmentTests, () => vscode.postMessage({ type: 'runAssignmentTests' }));
+			onClick(buttons.openTestReport, () => vscode.postMessage({ type: 'openTestReport' }));
+			onClick(buttons.createAssignment, () => vscode.postMessage({ type: 'createAssignment' }));
+			onClick(buttons.editAssignment, () => vscode.postMessage({ type: 'editAssignment' }));
 			onClick(buttons.exportWebsite, () => vscode.postMessage({ type: 'exportWebsite' }));
 			onClick(buttons.stop, () => vscode.postMessage({ type: 'stop' }));
 			onClick(buttons.processingReference, () => vscode.postMessage({ type: 'openReference' }));

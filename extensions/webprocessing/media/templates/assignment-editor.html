@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<style>
+		html, body { margin: 0; padding: 0; color: var(--vscode-foreground); background: var(--vscode-editor-background); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
+		main { padding: 16px; display: flex; flex-direction: column; gap: 14px; max-width: 900px; }
+		.row { display: grid; grid-template-columns: 140px 1fr; gap: 8px; align-items: center; }
+		input, textarea, select { box-sizing: border-box; width: 100%; border: 1px solid var(--vscode-input-border); background: var(--vscode-input-background); color: var(--vscode-input-foreground); font: inherit; padding: 5px 7px; }
+		textarea { min-height: 76px; font-family: var(--vscode-editor-font-family); }
+		button { min-height: 28px; width: max-content; border: 1px solid var(--vscode-button-border, transparent); border-radius: 2px; padding: 4px 10px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); font: inherit; cursor: pointer; }
+		button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+		.test { border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+		.actions { display: flex; gap: 8px; }
+		.note { color: var(--vscode-descriptionForeground); }
+	</style>
+</head>
+<body>
+	<main>
+		<h1>Autograded Assignment</h1>
+		<div class="row"><label>Student code</label><input id="student_code"></div>
+		<div class="row"><label>Entrypoint</label><input id="entrypoint"></div>
+		<div class="row"><label>Instructions</label><input id="instructions"></div>
+		<p class="note">Hidden expected outputs are write-only unless you re-enter them here. Leaving a hidden expected output blank preserves its existing proof and answer key when possible.</p>
+		<div id="tests"></div>
+		<div class="actions">
+			<button id="add" type="button">Add Test</button>
+			<button id="save" type="button">Save Assignment</button>
+		</div>
+	</main>
+	<script nonce="{{nonce}}">
+		const vscode = acquireVsCodeApi();
+		const state = JSON.parse("{{initialState}}");
+		const studentCode = document.getElementById('student_code');
+		const entrypoint = document.getElementById('entrypoint');
+		const instructions = document.getElementById('instructions');
+		const tests = document.getElementById('tests');
+		document.getElementById('add').addEventListener('click', () => { state.tests.push({ id: `case_${state.tests.length + 1}`, visibility: 'visible', input: '', expected_output: '', show_input: true }); render(); });
+		document.getElementById('save').addEventListener('click', save);
+		function render() {
+			studentCode.value = state.student_code || 'src/Solution.java';
+			entrypoint.value = state.entrypoint || 'src/Main.java';
+			instructions.value = state.instructions || 'README.md';
+			tests.replaceChildren(...state.tests.map((test, index) => renderTest(test, index)));
+		}
+		function renderTest(test, index) {
+			const root = document.createElement('section');
+			root.className = 'test';
+			root.innerHTML = `
+				<div class="row"><label>Id</label><input data-field="id"></div>
+				<div class="row"><label>Visibility</label><select data-field="visibility"><option value="visible">visible</option><option value="hidden">hidden</option></select></div>
+				<div class="row"><label>Show hidden input</label><select data-field="show_input"><option value="true">yes</option><option value="false">no</option></select></div>
+				<div class="row"><label>Input</label><textarea data-field="input"></textarea></div>
+				<div class="row"><label>Expected output</label><textarea data-field="expected_output"></textarea></div>
+				<div class="actions"><button class="secondary" data-action="up">Up</button><button class="secondary" data-action="down">Down</button><button class="secondary" data-action="remove">Remove</button></div>`;
+			for (const element of root.querySelectorAll('[data-field]')) {
+				const field = element.dataset.field;
+				element.value = field === 'show_input' ? String(!!test.show_input) : test[field] || '';
+				element.addEventListener('input', () => { test[field] = field === 'show_input' ? element.value === 'true' : element.value; });
+			}
+			root.querySelector('[data-action="remove"]').addEventListener('click', () => { state.tests.splice(index, 1); render(); });
+			root.querySelector('[data-action="up"]').addEventListener('click', () => { if (index > 0) { [state.tests[index - 1], state.tests[index]] = [state.tests[index], state.tests[index - 1]]; render(); } });
+			root.querySelector('[data-action="down"]').addEventListener('click', () => { if (index + 1 < state.tests.length) { [state.tests[index + 1], state.tests[index]] = [state.tests[index], state.tests[index + 1]]; render(); } });
+			return root;
+		}
+		function save() {
+			state.student_code = studentCode.value;
+			state.entrypoint = entrypoint.value;
+			state.instructions = instructions.value;
+			vscode.postMessage({ type: 'save', draft: state });
+		}
+		render();
+	</script>
+</body>
+</html>

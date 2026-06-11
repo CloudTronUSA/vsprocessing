@@ -1,8 +1,13 @@
 import * as vscode from 'vscode';
+import { assignmentPath, loadAssignment } from './assignment/assignmentLoader';
+import { decryptAnswerKey, normalizeOutput, verifyProof } from './assignment/crypto';
+import { AssignmentTextDocumentProvider } from './assignment/assignmentDocument';
+import { createAssignmentScaffold } from './assignment/scaffold';
+import type { Assignment, AssignmentCaseResult, AssignmentReportState } from './assignment/types';
 import { ProcessingCompiler } from './compiler/processingCompiler';
 import {
-	compileCommand, controlsViewType, defaultOpenStateKey, exportWebsiteCommand, openApcsaReferenceCommand,
-	openReferenceCommand, openReferenceSheetCommand, runCommand, stopCommand
+	compileCommand, controlsViewType, createAssignmentCommand, defaultOpenStateKey, editAssignmentCommand, exportWebsiteCommand, openApcsaReferenceCommand,
+	openReferenceCommand, openReferenceSheetCommand, openTestReportCommand, runAssignmentTestsCommand, runCommand, stopCommand
 } from './core/constants';
 import type { BuildArtifact, BuildOutputKind, ExtensionController, ExtensionState, ProcessingOutputTarget } from './core/types';
 import { WebsiteExporter } from './export/websiteExporter';
@@ -16,7 +21,9 @@ import {
 	statOrUndefined, stripExtension, type SourceKind
 } from './utils';
 import { ExtensionControlsProvider } from './views/controlsView';
+import { AssignmentEditorPanel } from './views/assignmentEditor';
 import { ProcessingReferencePanel } from './views/referencePanel';
+import { AssignmentReportPanel } from './views/testReportView';
 
 declare function setTimeout(handler: (...args: unknown[]) => void, timeout?: number): unknown;
 
@@ -30,11 +37,17 @@ class Extension implements vscode.Disposable, ExtensionController {
 	private readonly output = vscode.window.createOutputChannel('Processing');
 	private readonly compiler: ProcessingCompiler;
 	private readonly controlsProvider: ExtensionControlsProvider;
+	private readonly assignmentDocuments = new AssignmentTextDocumentProvider();
 	private readonly websiteExporter: WebsiteExporter;
 	private readonly javaRunner: JavaRunner;
 	private readonly languageService: ProcessingLanguageService;
 	private runtimePanel: ProcessingRuntimePanel | undefined;
 	private referencePanel: ProcessingReferencePanel | undefined;
+	private assignmentEditorPanel: AssignmentEditorPanel | undefined;
+	private assignmentReportPanel: AssignmentReportPanel | undefined;
+	private assignment: Assignment | undefined;
+	private assignmentReport: AssignmentReportState = emptyAssignmentReport();
+	private openedAssignmentScope: string | undefined;
 	private mode: SourceKind = 'processing';
 	private buildArtifact: BuildArtifact | undefined;
 	private compiling = false;
@@ -57,6 +70,7 @@ class Extension implements vscode.Disposable, ExtensionController {
 		this.disposables.push(this.output);
 		this.disposables.push(this.languageService);
 		this.disposables.push(this.javaRunner);
+		this.disposables.push(vscode.workspace.registerTextDocumentContentProvider('webprocessing-assignment', this.assignmentDocuments));
 		this.disposables.push(vscode.window.registerWebviewViewProvider(controlsViewType, this.controlsProvider, {
 			webviewOptions: { retainContextWhenHidden: true }
 		}));
@@ -73,13 +87,16 @@ class Extension implements vscode.Disposable, ExtensionController {
 		}
 		this.runtimePanel?.dispose();
 		this.referencePanel?.dispose();
+		this.assignmentEditorPanel?.dispose();
+		this.assignmentReportPanel?.dispose();
 	}
 
 	getState(): ExtensionState {
 		return {
 			mode: this.mode,
 			processingOutput: this.getProcessingOutputTarget(),
-			hasSources: hasSources(this.mode),
+			assignment_mode: !!this.assignment,
+			hasSources: !!this.assignment || hasSources(this.mode),
 			hasCompiled: !!this.buildArtifact,
 			isCompiling: this.compiling,
 			isRunning: this.running,
@@ -88,7 +105,7 @@ class Extension implements vscode.Disposable, ExtensionController {
 	}
 
 	setMode(mode: SourceKind): void {
-		if (this.mode === mode || this.compiling || this.running) {
+		if (this.assignment || this.mode === mode || this.compiling || this.running) {
 			return;
 		}
 		this.mode = mode;
@@ -142,6 +159,9 @@ class Extension implements vscode.Disposable, ExtensionController {
 		if (this.compiling || this.running) {
 			return;
 		}
+		if (this.assignment) {
+			return this.runAssignmentTests();
+		}
 
 		await this.refreshState();
 		let artifact = this.buildArtifact;
@@ -173,6 +193,139 @@ class Extension implements vscode.Disposable, ExtensionController {
 		this.setRunning(false);
 	}
 
+	async runAssignmentTests(): Promise<void> {
+		if (this.compiling || this.running || !this.assignment) {
+			return;
+		}
+		await this.refreshState();
+		if (!this.assignment) {
+			return;
+		}
+		this.assignmentReport = {
+			assignment_mode: true,
+			title: 'Test Case Report',
+			running: true,
+			unlocked: false,
+			results: [],
+			message: 'Running assignment tests...'
+		};
+		this.assignmentReportPanel?.update();
+		this.showOutput();
+		this.log('\n==== BEGIN ASSIGNMENT TESTS ====\n');
+
+		try {
+			let artifact = this.buildArtifact;
+			if (!artifact || artifact.mode !== 'java' || artifact.outdated) {
+				await this.compile();
+				artifact = this.buildArtifact;
+			}
+			if (!artifact || artifact.mode !== 'java') {
+				throw new Error('Assignment Java build artifact was not created.');
+			}
+
+			this.setRunning(true);
+			const results: AssignmentCaseResult[] = [];
+			const outputs = new Map<string, string>();
+			for (const test of this.assignment.config.tests) {
+				this.log(`[assignment] Running ${test.id}...`);
+				const run = await this.javaRunner.runForOutput(artifact, test.input);
+				const actual = run.stdout;
+				outputs.set(test.id, actual);
+				const expected = test.visibility === 'visible' ? test.expected_output : undefined;
+				const passed = run.error
+					? false
+					: test.visibility === 'visible'
+						? normalizeOutput(actual) === normalizeOutput(expected ?? '')
+						: test.proof ? await verifyProof(actual, test.proof) : false;
+				results.push({
+					id: test.id,
+					visibility: test.visibility,
+					input: test.visibility === 'visible' || test.show_input ? test.input : undefined,
+					expected_output: expected,
+					actual_output: actual,
+					passed,
+					error: run.error || run.stderr || undefined,
+					diff_available: typeof expected === 'string'
+				});
+			}
+
+			const answerPayload = this.assignment.config.answer_key
+				? await decryptAnswerKey(this.assignment.config.answer_key, this.assignment.config.tests, outputs)
+				: undefined;
+			const unlockedResults = answerPayload?.tests
+				? results.map(result => {
+					const expected_output = result.expected_output ?? answerPayload.tests?.[result.id]?.expected_output;
+					return {
+						...result,
+						expected_output,
+						diff_available: typeof expected_output === 'string'
+					};
+				})
+				: results;
+			const passedCount = unlockedResults.filter(result => result.passed).length;
+			this.assignmentReport = {
+				assignment_mode: true,
+				title: 'Test Case Report',
+				running: false,
+				unlocked: !!answerPayload,
+				results: unlockedResults,
+				message: `${passedCount}/${unlockedResults.length} tests passed${answerPayload ? '; answer key unlocked.' : '.'}`
+			};
+			this.log(`\n==== ASSIGNMENT TESTS COMPLETE: ${passedCount}/${unlockedResults.length} passed ====\n`);
+		} catch (error) {
+			this.assignmentReport = {
+				assignment_mode: true,
+				title: 'Test Case Report',
+				running: false,
+				unlocked: false,
+				results: [],
+				message: `Assignment tests failed: ${error}`
+			};
+			this.log(`[assignment] ${error}`);
+			void vscode.window.showErrorMessage(vscode.l10n.t('Assignment tests failed. See the Processing output channel.'));
+		} finally {
+			this.setRunning(false);
+			this.assignmentReportPanel?.update();
+			await this.refreshState();
+		}
+	}
+
+	async openTestReport(): Promise<void> {
+		if (!this.assignmentReportPanel) {
+			this.assignmentReportPanel = new AssignmentReportPanel(this.context.extensionUri, this, () => {
+				this.assignmentReportPanel = undefined;
+			});
+			return;
+		}
+		this.assignmentReportPanel.reveal();
+	}
+
+	async createAssignment(): Promise<void> {
+		const workspaceFolder = getWorkspaceFolder();
+		if (!workspaceFolder) {
+			void vscode.window.showWarningMessage(vscode.l10n.t('Open a folder before creating an assignment.'));
+			return;
+		}
+		await createAssignmentScaffold(workspaceFolder);
+		await this.refreshState();
+		await this.openAssignmentWorkspace();
+	}
+
+	async editAssignment(): Promise<void> {
+		if (!this.assignment) {
+			void vscode.window.showWarningMessage(vscode.l10n.t('No autograded assignment is loaded.'));
+			return;
+		}
+		if (!this.assignmentEditorPanel) {
+			this.assignmentEditorPanel = new AssignmentEditorPanel(this.context.extensionUri, this.assignment.uri, async () => {
+				await this.refreshState();
+			}, () => {
+				this.assignmentEditorPanel = undefined;
+			});
+		}
+		await this.assignmentEditorPanel.open();
+	}
+
 	async openReference(): Promise<void> {
 		await this.openReferencePanel('Processing Reference', 'https://processing.org/reference/');
 	}
@@ -200,6 +353,10 @@ class Extension implements vscode.Disposable, ExtensionController {
 	private registerCommands(): void {
 		this.disposables.push(vscode.commands.registerCommand(compileCommand, () => this.compile()));
 		this.disposables.push(vscode.commands.registerCommand(runCommand, () => this.run()));
+		this.disposables.push(vscode.commands.registerCommand(runAssignmentTestsCommand, () => this.runAssignmentTests()));
+		this.disposables.push(vscode.commands.registerCommand(openTestReportCommand, () => this.openTestReport()));
+		this.disposables.push(vscode.commands.registerCommand(createAssignmentCommand, () => this.createAssignment()));
+		this.disposables.push(vscode.commands.registerCommand(editAssignmentCommand, () => this.editAssignment()));
 		this.disposables.push(vscode.commands.registerCommand(stopCommand, () => this.stop()));
 		this.disposables.push(vscode.commands.registerCommand(exportWebsiteCommand, () => this.exportWebsite()));
 		this.disposables.push(vscode.commands.registerCommand(openReferenceCommand, () => this.openReference()));
@@ -222,6 +379,22 @@ class Extension implements vscode.Disposable, ExtensionController {
 
 	private async refreshState(): Promise<void> {
 		const workspaceFolder = getWorkspaceFolder();
+		let assignmentErrorMessage: string | undefined;
+		try {
+			this.assignment = await loadAssignment(workspaceFolder);
+		} catch (error) {
+			this.assignment = undefined;
+			assignmentErrorMessage = `Invalid assignment.json: ${error}`;
+			this.assignmentReport = emptyAssignmentReport(assignmentErrorMessage);
+		}
+		if (this.assignment) {
+			this.mode = 'java';
+			this.assignmentReport = this.assignmentReport.assignment_mode ? this.assignmentReport : emptyAssignmentReport('No test results yet.', true);
+			await this.openAssignmentWorkspace();
+		} else {
+			this.assignmentReport = emptyAssignmentReport(assignmentErrorMessage);
+			this.openedAssignmentScope = undefined;
+		}
 		let buildArtifact: BuildArtifact | undefined;
 		if (workspaceFolder) {
 			const wasmUri = buildArtifactFileUri(workspaceFolder, 'wasm');
@@ -251,15 +424,18 @@ class Extension implements vscode.Disposable, ExtensionController {
 		await vscode.commands.executeCommand('setContext', 'webprocessing.hasCompiled', !!buildArtifact);
 		await vscode.commands.executeCommand('setContext', 'webprocessing.isCompiling', this.compiling);
 		await vscode.commands.executeCommand('setContext', 'webprocessing.isRunning', this.running);
+		await vscode.commands.executeCommand('setContext', 'webprocessing.assignment_mode', !!this.assignment);
 		this.controlsProvider.update();
+		this.assignmentReportPanel?.update();
 	}
 
 	private async compileCurrentSources(): Promise<BuildArtifact> {
 		this.log('\n[compiler] collecting source files...');
-		const collection = await collectSources(this.mode);
+		const compileMode = this.assignment ? 'java' : this.mode;
+		const collection = await collectSources(compileMode);
 		const { sources } = collection;
 		if (sources.length === 0) {
-			throw new Error(`No ${this.mode === 'processing' ? '.pde' : '.java'} files were found.`);
+			throw new Error(`No ${compileMode === 'processing' ? '.pde' : '.java'} files were found.`);
 		}
 
 		for (const source of sources) {
@@ -267,16 +443,18 @@ class Extension implements vscode.Disposable, ExtensionController {
 		}
 
 		const workspaceFolder = collection.workspaceFolders[0];
-		const entrypoint = identifyEntrypoint(sources, workspaceFolder);
+		const entrypoint = this.assignment
+			? sources.find(source => source.path === this.assignment?.config.entrypoint)
+			: identifyEntrypoint(sources, workspaceFolder);
 		if (!entrypoint && sources.length > 1) {
-			throw new Error('Cannot determine program entrypoint for a multi-file project. Use foldername.pde, foldername.java, main.pde, or main.java.');
+			throw new Error(this.assignment ? `Assignment entrypoint not found: ${this.assignment.config.entrypoint}` : 'Cannot determine program entrypoint for a multi-file project. Use foldername.pde, foldername.java, main.pde, or main.java.');
 		}
 		const mainSource = entrypoint ?? sources[0];
 		this.log(`[compiler] Entrypoint: ${mainSource.path}`);
 
 		const processingOutput = this.getProcessingOutputTarget();
 		const targetFileName = workspaceFolder ? buildArtifactFileName(workspaceFolder) : `${stripExtension(mainSource.path ?? 'sketch')}.compiled.wasm`;
-		const compiled = await this.compiler.compile(this.mode, sources, mainSource, targetFileName, processingOutput);
+		const compiled = await this.compiler.compile(compileMode, sources, mainSource, targetFileName, processingOutput);
 		const targetUri = workspaceFolder ? buildArtifactFileUri(workspaceFolder, compiled.output === 'js' ? 'js' : 'wasm') : undefined;
 
 		if (targetUri && workspaceFolder) {
@@ -284,7 +462,7 @@ class Extension implements vscode.Disposable, ExtensionController {
 			await vscode.workspace.fs.writeFile(targetUri, bytes);
 			this.log(`[compiler] Wrote ${compiled.name} (${bytes.byteLength} bytes, ${compiled.output}).`);
 			return {
-				mode: this.mode,
+				mode: compileMode,
 				scope: workspaceFolder.uri.toString(),
 				name: compiled.name,
 				output: compiled.output,
@@ -296,7 +474,7 @@ class Extension implements vscode.Disposable, ExtensionController {
 		const size = compiled.bytes?.byteLength ?? compiled.text?.length ?? 0;
 		this.log(`[compiler] Stored ${compiled.name} in temporary memory (${size} ${compiled.bytes ? 'bytes' : 'chars'}, ${compiled.output}).`);
 		return {
-			mode: this.mode,
+			mode: compileMode,
 			scope: 'open-tabs',
 			name: compiled.name,
 			output: compiled.output,
@@ -384,6 +562,40 @@ class Extension implements vscode.Disposable, ExtensionController {
 		await this.referencePanel.open(title, source);
 	}
 
+	getAssignmentReportState(): AssignmentReportState {
+		return this.assignment ? this.assignmentReport : emptyAssignmentReport();
+	}
+
+	async diffAssignmentTest(id: string): Promise<void> {
+		const result = this.assignmentReport.results.find(result => result.id === id);
+		if (!result || typeof result.expected_output !== 'string') {
+			return;
+		}
+		const expectedUri = vscode.Uri.parse(`webprocessing-assignment:/${encodeURIComponent(id)}.expected.txt`);
+		const actualUri = vscode.Uri.parse(`webprocessing-assignment:/${encodeURIComponent(id)}.actual.txt`);
+		this.assignmentDocuments.set(expectedUri, result.expected_output);
+		this.assignmentDocuments.set(actualUri, result.actual_output);
+		await vscode.commands.executeCommand('vscode.diff', expectedUri, actualUri, `${id}: Expected ↔ Actual`);
+	}
+
+	private async openAssignmentWorkspace(): Promise<void> {
+		if (!this.assignment) {
+			this.openedAssignmentScope = undefined;
+			return;
+		}
+		const scope = `${this.assignment.uri.toString()}@${this.assignment.config.student_code}@${this.assignment.config.instructions}`;
+		if (this.openedAssignmentScope === scope) {
+			return;
+		}
+		this.openedAssignmentScope = scope;
+		await vscode.window.showTextDocument(assignmentPath(this.assignment, this.assignment.config.student_code), {
+			viewColumn: vscode.ViewColumn.One,
+			preview: false
+		});
+		await vscode.commands.executeCommand('markdown.showPreviewToSide', assignmentPath(this.assignment, this.assignment.config.instructions));
+		await this.openTestReport();
+	}
+
 	private handleRuntimeMessage(message: RuntimeMessage): void {
 		switch (message.type) {
 			case 'log-raw':
@@ -450,4 +662,15 @@ function hasIssues(error: unknown): error is { readonly issues: readonly { reado
 function extensionVersion(context: vscode.ExtensionContext): string {
 	const packageJson = context.extension.packageJSON as { readonly version?: unknown };
 	return typeof packageJson.version === 'string' ? packageJson.version : 'unknown version';
+}
+
+function emptyAssignmentReport(message = 'No autograded assignment is loaded.', assignment_mode = false): AssignmentReportState {
+	return {
+		assignment_mode,
+		title: 'Test Case Report',
+		running: false,
+		unlocked: false,
+		results: [],
+		message
+	};
 }

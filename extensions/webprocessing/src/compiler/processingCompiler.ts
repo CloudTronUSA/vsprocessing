@@ -103,7 +103,7 @@ export class ProcessingCompiler {
 
 		try {
 			for (const source of sources) {
-				compiler.addSource(source.path, source.content);
+				compiler.addSource(this.javaCompilerSourcePath(source), source.content);
 			}
 
 			this.log('[compiler] Compiling Java sources...');
@@ -150,6 +150,12 @@ export class ProcessingCompiler {
 			return mainClasses[0];
 		}
 		throw new Error(`Multiple Java main classes found: ${mainClasses.join(', ')}. Use main.java or the workspace folder name for the entrypoint.`);
+	}
+
+	private javaCompilerSourcePath(source: WorkspaceSource): string {
+		return /^\s*package\s+[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\s*;/m.test(source.content)
+			? source.path
+			: source.path.split('/').pop() ?? source.path;
 	}
 
 	private compilerOptions(output: ProcessingOutputTarget): CreateCompilerOptions {

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<style>
+		html, body { margin: 0; padding: 0; color: var(--vscode-foreground); background: transparent; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
+		main { padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+		button { min-height: 28px; border: 1px solid var(--vscode-button-border, transparent); border-radius: 2px; padding: 4px 10px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); font: inherit; cursor: pointer; }
+		button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+		button:disabled { opacity: .45; cursor: default; }
+		.summary { color: var(--vscode-descriptionForeground); line-height: 1.35; }
+		.case { border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+		.case.pass { border-color: var(--vscode-testing-iconPassed); }
+		.case.fail { border-color: var(--vscode-testing-iconFailed); }
+		.title { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; }
+		.badge { font-size: 11px; color: var(--vscode-descriptionForeground); }
+		pre { margin: 0; padding: 6px; overflow: auto; background: var(--vscode-textCodeBlock-background); white-space: pre-wrap; word-break: break-word; }
+		label { color: var(--vscode-descriptionForeground); font-size: 11px; }
+	</style>
+</head>
+<body>
+	<main>
+		<button id="run" type="button">Run Assignment Tests</button>
+		<div id="summary" class="summary"></div>
+		<div id="cases"></div>
+	</main>
+	<script nonce="{{nonce}}">
+		const vscode = acquireVsCodeApi();
+		const state = JSON.parse("{{initialState}}");
+		const run = document.getElementById('run');
+		const summary = document.getElementById('summary');
+		const cases = document.getElementById('cases');
+		run.addEventListener('click', () => vscode.postMessage({ type: 'run' }));
+		window.addEventListener('message', event => {
+			if (event.data?.type === 'state') applyState(event.data.state);
+		});
+		function applyState(next) {
+			Object.assign(state, next);
+			run.disabled = !state.assignment_mode || state.running;
+			const passed = state.results.filter(result => result.passed).length;
+			summary.textContent = state.message || (state.results.length ? `${passed}/${state.results.length} tests passed${state.unlocked ? ' · answer key unlocked' : ''}` : 'No test results yet.');
+			cases.replaceChildren(...state.results.map(renderCase));
+		}
+		function renderCase(result) {
+			const root = document.createElement('section');
+			root.className = `case ${result.passed ? 'pass' : 'fail'}`;
+			const title = document.createElement('div');
+			title.className = 'title';
+			title.textContent = `${result.passed ? 'Passed' : 'Failed'} · ${result.id}`;
+			const badge = document.createElement('span');
+			badge.className = 'badge';
+			badge.textContent = result.visibility;
+			title.appendChild(badge);
+			root.appendChild(title);
+			if (result.error) addBlock(root, 'Error', result.error);
+			if (typeof result.input === 'string') addBlock(root, 'Input', result.input);
+			if (typeof result.expected_output === 'string') addBlock(root, 'Expected', result.expected_output);
+			else addBlock(root, 'Expected', 'Hidden');
+			addBlock(root, 'Actual', result.actual_output || '');
+			const diff = document.createElement('button');
+			diff.className = 'secondary';
+			diff.type = 'button';
+			diff.textContent = 'Diff Expected vs Actual';
+			diff.disabled = !result.diff_available;
+			diff.addEventListener('click', () => vscode.postMessage({ type: 'diff', id: result.id }));
+			root.appendChild(diff);
+			return root;
+		}
+		function addBlock(root, labelText, value) {
+			const label = document.createElement('label');
+			label.textContent = labelText;
+			const pre = document.createElement('pre');
+			pre.textContent = value;
+			root.append(label, pre);
+		}
+		applyState(state);
+	</script>
+</body>
+</html>

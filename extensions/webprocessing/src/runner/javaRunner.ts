@@ -4,6 +4,7 @@ import type { BuildArtifact } from '../core/types';
 interface JavaRuntimeMessage {
 	readonly type?: string;
 	readonly text?: string;
+	readonly level?: string;
 }
 
 export class JavaRunner implements vscode.Disposable {
@@ -54,7 +55,8 @@ export class JavaRunner implements vscode.Disposable {
 			worker.postMessage({
 				type: 'run',
 				runtimeUri: this.runtimeUri(),
-				wasmBytes
+				wasmBytes,
+				capture: false
 			}, [wasmBytes.buffer]);
 		} catch (error) {
 			this.log(`[runtime] ${error}`);
@@ -62,6 +64,60 @@ export class JavaRunner implements vscode.Disposable {
 			this.setRunning(false);
 			await this.refreshState();
 		}
+	}
+
+	async runForOutput(artifact: BuildArtifact, input: string): Promise<{ stdout: string; stderr: string; error?: string }> {
+		this.stop(false);
+		const sourceBytes = artifact.bytes ?? await vscode.workspace.fs.readFile(artifact.uri!);
+		const wasmBytes = new Uint8Array(sourceBytes);
+		const runId = ++this.runId;
+		let worker: Worker | undefined;
+		return new Promise(resolve => {
+			let stdout = '';
+			let stderr = '';
+			let settled = false;
+			const finish = (result: { stdout: string; stderr: string; error?: string }) => {
+				if (settled) {
+					return;
+				}
+				settled = true;
+				worker?.terminate();
+				if (runId === this.runId && this.worker === worker) {
+					this.worker = undefined;
+				}
+				resolve(result);
+			};
+			worker = new Worker(vscode.Uri.joinPath(this.extensionUri, 'media', 'java-runtime-worker.js').toString(), {
+				name: 'webprocessing-java-test-runtime'
+			});
+			this.worker = worker;
+			worker.onmessage = event => {
+				const message = event.data as JavaRuntimeMessage;
+				switch (message.type) {
+					case 'log':
+						if (message.level === 'error' || message.level === 'warn') {
+							stderr += `${message.text ?? ''}\n`;
+						} else {
+							stdout += `${message.text ?? ''}\n`;
+						}
+						break;
+					case 'finished':
+						finish({ stdout, stderr });
+						break;
+					case 'error':
+						finish({ stdout, stderr, error: message.text ?? 'Runtime failed.' });
+						break;
+				}
+			};
+			worker.onerror = event => finish({ stdout, stderr, error: event.message });
+			worker.postMessage({
+				type: 'run',
+				runtimeUri: this.runtimeUri(),
+				wasmBytes,
+				input,
+				capture: true
+			}, [wasmBytes.buffer]);
+		});
 	}
 
 	stop(log = true): void {
