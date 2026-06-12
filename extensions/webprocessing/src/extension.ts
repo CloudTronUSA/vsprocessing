@@ -1,103 +1,161 @@
 import * as vscode from 'vscode';
-import { assignmentPath, loadAssignment } from './assignment/assignmentLoader';
-import { decryptAnswerKey, normalizeOutput, verifyProof } from './assignment/crypto';
-import { AssignmentTextDocumentProvider } from './assignment/assignmentDocument';
-import { createAssignmentScaffold } from './assignment/scaffold';
-import type { Assignment, AssignmentCaseResult, AssignmentReportState } from './assignment/types';
-import { ProcessingCompiler } from './compiler/processingCompiler';
-import {
-	compileCommand, controlsViewType, createAssignmentCommand, defaultOpenStateKey, editAssignmentCommand, exportWebsiteCommand, openApcsaReferenceCommand,
-	openReferenceCommand, openReferenceSheetCommand, openTestReportCommand, runAssignmentTestsCommand, runCommand, stopCommand
-} from './core/constants';
-import type { BuildArtifact, BuildOutputKind, ExtensionController, ExtensionState, ProcessingOutputTarget } from './core/types';
-import { WebsiteExporter } from './export/websiteExporter';
-import { ProcessingLanguageService } from './java-lsp/processingLsp';
-import { JavaRunner } from './runner/javaRunner';
-import { ProcessingRuntimePanel, type RuntimeMessage } from './runner/processingRuntimePanel';
+import { ProcessingLinter } from './linter';
 import {
 	buildArtifactFileName, buildArtifactFileUri, collectSources, countLines,
-	formatDuration, getWorkspaceFolder, hasSources, identifyEntrypoint,
-	isBuildArtifactOutdated, isTempBuildArtifactOutdated, sourceVersions,
-	statOrUndefined, stripExtension, type SourceKind
+	createNonce, escapeScriptJson, formatDiagnostic, formatDuration,
+	getWorkspaceFolder, hasSources, identifyEntrypoint, isBuildArtifactOutdated,
+	isTempBuildArtifactOutdated, readTemplate,
+	renderTemplate, sourceVersions, statOrUndefined, stripExtension, stripWasmExtension,
+	toJavaIdentifier, type SourceKind, type WorkspaceSource
 } from './utils';
-import { ExtensionControlsProvider } from './views/controlsView';
-import { AssignmentEditorPanel } from './views/assignmentEditor';
-import { ProcessingReferencePanel } from './views/referencePanel';
-import { AssignmentReportPanel } from './views/testReportView';
 
 declare function setTimeout(handler: (...args: unknown[]) => void, timeout?: number): unknown;
+
+const compileCommand = 'webprocessing.compile';
+const runCommand = 'webprocessing.run';
+const stopCommand = 'webprocessing.stop';
+const openReferenceCommand = 'webprocessing.openReference';
+const openApcsaReferenceCommand = 'webprocessing.openApcsaReference';
+const controlsViewType = 'webprocessing.controls';
+const runtimeViewType = 'webruntime';
+const referenceViewType = 'webprocessing.reference';
+const defaultOpenStateKey = 'webprocessing.defaultOpen.v1';
+
+type ProcessingModule = typeof import('../lib/teavm-javac/processing-teavm.js');
+type CompilerModule = typeof import('../lib/teavm-javac/teavm-javac.js');
+
+interface BuildArtifact {
+	readonly mode: SourceKind;
+	readonly scope: string;
+	readonly name: string;
+	readonly uri?: vscode.Uri;
+	readonly bytes?: Uint8Array;
+	readonly sourceVersions?: ReadonlyMap<string, number>;
+	readonly outdated: boolean;	// if the compiled file outdated?
+}
+
+interface ExtensionState {
+	readonly mode: SourceKind;
+	readonly hasSources: boolean;	// has source files?
+	readonly hasCompiled: boolean;	// has compiled file?
+	readonly isCompiling: boolean;
+	readonly isRunning: boolean;
+	readonly isOutdated: boolean;
+}
+
+interface ExtensionControlsViewState extends ExtensionState {
+	readonly status: string;
+	readonly warning: string;
+}
+
+const importModule = new Function('specifier', 'return import(specifier);') as <T>(specifier: string) => Promise<T>;
 
 export function activate(context: vscode.ExtensionContext): void {
 	const extension = new Extension(context);
 	context.subscriptions.push(extension);
 }
 
-class Extension implements vscode.Disposable, ExtensionController {
+function normalizeRuntimeFilePath(path: string): string | undefined {
+	const normalized = path.replace(/\\/g, '/').replace(/^\/+/, '');
+	if (!normalized || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(normalized)) {
+		return undefined;
+	}
+	const parts = normalized.split('/');
+	if (parts.some(part => !part || part === '.' || part === '..')) {
+		return undefined;
+	}
+	return parts.join('/');
+}
+
+function createRuntimeFileNotFoundError(path: string): Error {
+	const error = new Error(`Runtime file not found: ${path}`);
+	error.name = 'FileNotFoundError';
+	return error;
+}
+
+function runtimeFileErrorPayload(error: unknown): { readonly error: string; readonly errorName: string } {
+	return {
+		error: error instanceof Error ? error.message : String(error),
+		errorName: error instanceof Error ? error.name : 'Error'
+	};
+}
+
+async function openRuntimeFile(root: vscode.Uri | undefined, path: string): Promise<Uint8Array> {
+	const normalized = normalizeRuntimeFilePath(path);
+	if (!root || !normalized) {
+		throw createRuntimeFileNotFoundError(path);
+	}
+	const uri = vscode.Uri.joinPath(root, ...normalized.split('/'));
+	try {
+		return await vscode.workspace.fs.readFile(uri);
+	} catch {
+		throw createRuntimeFileNotFoundError(path);
+	}
+}
+
+async function writeRuntimeFile(root: vscode.Uri | undefined, path: string, content: Uint8Array): Promise<void> {
+	const normalized = normalizeRuntimeFilePath(path);
+	if (!root || !normalized) {
+		throw createRuntimeFileNotFoundError(path);
+	}
+	await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(root, ...normalized.split('/')), content);
+}
+
+class Extension implements vscode.Disposable {
 	private readonly disposables: vscode.Disposable[] = [];
-	private readonly output = vscode.window.createOutputChannel('Processing');
-	private readonly compiler: ProcessingCompiler;
-	private readonly controlsProvider: ExtensionControlsProvider;
-	private readonly assignmentDocuments = new AssignmentTextDocumentProvider();
-	private readonly websiteExporter: WebsiteExporter;
-	private readonly javaRunner: JavaRunner;
-	private readonly languageService: ProcessingLanguageService;
-	private runtimePanel: ProcessingRuntimePanel | undefined;
+	private readonly output = vscode.window.createOutputChannel('Processing');	// output channel
+	private readonly controlsProvider: ExtensionControlsProvider;	// control panel
+	private readonly linter: ProcessingLinter;
+	private runtimePanel: ProcessingRuntimePanel | undefined;	// runtime panel
 	private referencePanel: ProcessingReferencePanel | undefined;
-	private assignmentEditorPanel: AssignmentEditorPanel | undefined;
-	private assignmentReportPanel: AssignmentReportPanel | undefined;
-	private assignment: Assignment | undefined;
-	private assignmentReport: AssignmentReportState = emptyAssignmentReport();
-	private openedAssignmentScope: string | undefined;
+	private javaRuntimeWorker: Worker | undefined;
+	private javaRuntimeRunId = 0;
+	private javaRuntimeRoot: vscode.Uri | undefined;
 	private mode: SourceKind = 'processing';
+	private processingCompilerModule: Promise<ProcessingModule> | undefined;
+	private javaCompilerModule: Promise<CompilerModule> | undefined;
 	private buildArtifact: BuildArtifact | undefined;
 	private compiling = false;
 	private running = false;
 
 	constructor(private readonly context: vscode.ExtensionContext) {
-		this.compiler = new ProcessingCompiler(context.extensionUri, message => this.log(message));
-		this.controlsProvider = new ExtensionControlsProvider(context.extensionUri, this);
-		this.websiteExporter = new WebsiteExporter(context.extensionUri, this.compiler, extensionVersion(context), message => this.log(message));
-		this.javaRunner = new JavaRunner(
-			context.extensionUri,
-			() => this.compiler.assetImportUri('compiler.wasm-runtime.js'),
-			message => this.log(message),
-			message => this.appendOutput(message),
-			() => this.showOutput(),
-			running => this.setRunning(running),
-			() => this.refreshState()
-		);
-		this.languageService = new ProcessingLanguageService(context);
-
+		this.controlsProvider = new ExtensionControlsProvider(this.context.extensionUri, this);
+		this.linter = new ProcessingLinter(context);
 		this.disposables.push(this.output);
-		this.disposables.push(this.languageService);
-		this.disposables.push(this.javaRunner);
-		this.disposables.push(vscode.workspace.registerTextDocumentContentProvider('webprocessing-assignment', this.assignmentDocuments));
+		this.disposables.push(this.linter);
 		this.disposables.push(vscode.window.registerWebviewViewProvider(controlsViewType, this.controlsProvider, {
 			webviewOptions: { retainContextWhenHidden: true }
 		}));
-		this.registerCommands();
-		this.registerWorkspaceListeners();
+		// commands
+		this.disposables.push(vscode.commands.registerCommand(compileCommand, () => this.compile()));
+		this.disposables.push(vscode.commands.registerCommand(runCommand, () => this.run()));
+		this.disposables.push(vscode.commands.registerCommand(stopCommand, () => this.stop()));
+		this.disposables.push(vscode.commands.registerCommand(openReferenceCommand, () => this.openReference()));
+		this.disposables.push(vscode.commands.registerCommand(openApcsaReferenceCommand, () => this.openApcsaReference()));
+		// events
+		this.disposables.push(vscode.workspace.onDidChangeWorkspaceFolders(() => this.refreshState()));
+		this.disposables.push(vscode.workspace.onDidOpenTextDocument(() => this.refreshState()));
+		this.disposables.push(vscode.workspace.onDidChangeTextDocument(() => this.refreshState()));
+		this.disposables.push(vscode.workspace.onDidDeleteFiles(() => this.refreshState()));
+		this.disposables.push(vscode.workspace.onDidCreateFiles(() => this.refreshState()));
 		void this.refreshState();
 		void this.openControlView();
 	}
 
 	dispose(): void {
 		this.stop();
+		// kill all evilness
 		for (const disposable of this.disposables) {
 			disposable.dispose();
 		}
 		this.runtimePanel?.dispose();
 		this.referencePanel?.dispose();
-		this.assignmentEditorPanel?.dispose();
-		this.assignmentReportPanel?.dispose();
 	}
 
 	getState(): ExtensionState {
 		return {
 			mode: this.mode,
-			processingOutput: this.getProcessingOutputTarget(),
-			assignment_mode: !!this.assignment,
-			hasSources: !!this.assignment || hasSources(this.mode),
+			hasSources: hasSources(this.mode),
 			hasCompiled: !!this.buildArtifact,
 			isCompiling: this.compiling,
 			isRunning: this.running,
@@ -105,8 +163,38 @@ class Extension implements vscode.Disposable, ExtensionController {
 		};
 	}
 
+	private async refreshState(): Promise<void> {
+		const workspaceFolder = getWorkspaceFolder();
+		let buildArtifact: BuildArtifact | undefined;
+		if (workspaceFolder) {
+			// see if the compiled file exists and if it's outdated
+			const uri = buildArtifactFileUri(workspaceFolder);
+			const stat = await statOrUndefined(uri);
+			if (stat) {
+				buildArtifact = {
+					mode: this.mode,
+					scope: workspaceFolder.uri.toString(),
+					name: buildArtifactFileName(workspaceFolder),
+					uri,
+					outdated: await isBuildArtifactOutdated(workspaceFolder, stat.mtime)
+				};
+			}
+		} else if (this.buildArtifact?.bytes && this.buildArtifact.sourceVersions) {
+			buildArtifact = {
+				...this.buildArtifact,
+				outdated: isTempBuildArtifactOutdated(this.buildArtifact.sourceVersions)
+			};
+		}
+
+		this.buildArtifact = buildArtifact;
+		await vscode.commands.executeCommand('setContext', 'webprocessing.hasCompiled', !!buildArtifact);
+		await vscode.commands.executeCommand('setContext', 'webprocessing.isCompiling', this.compiling);
+		await vscode.commands.executeCommand('setContext', 'webprocessing.isRunning', this.running);
+		this.controlsProvider.update();
+	}
+
 	setMode(mode: SourceKind): void {
-		if (this.assignment || this.mode === mode || this.compiling || this.running) {
+		if (this.mode === mode || this.compiling || this.running) {
 			return;
 		}
 		this.mode = mode;
@@ -114,17 +202,26 @@ class Extension implements vscode.Disposable, ExtensionController {
 		void this.refreshState();
 	}
 
-	async setProcessingOutput(output: ProcessingOutputTarget): Promise<void> {
-		if (this.compiling || this.running) {
+	private showOutput(): void {
+		this.output.show(true);
+	}
+
+	private log(message = ''): void {
+		this.output.appendLine(message);
+	}
+
+	private appendOutput(message = ''): void {
+		this.output.append(message);
+	}
+
+	// open the control panel (on first activation)
+	private async openControlView(): Promise<void> {
+		if (this.context.globalState.get<boolean>(defaultOpenStateKey)) {
 			return;
 		}
-		const normalized = output === 'wasm-gc' || output === 'js' ? output : 'auto';
-		if (this.getProcessingOutputTarget() === normalized) {
-			return;
-		}
-		const target = getWorkspaceFolder() ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
-		await vscode.workspace.getConfiguration('webprocessing').update('processingOutput', normalized, target);
-		await this.refreshState();
+		await this.context.globalState.update(defaultOpenStateKey, true);
+		await new Promise(resolve => setTimeout(resolve, 500));
+		await vscode.commands.executeCommand(`${controlsViewType}.focus`);
 	}
 
 	async compile(): Promise<void> {
@@ -138,16 +235,70 @@ class Extension implements vscode.Disposable, ExtensionController {
 		this.output.clear();
 		this.log('\n==== BEGIN COMPILATION ====\n');
 		this.log(`[compiler] Mode: ${this.mode}`);
-		const processingOutput = this.getProcessingOutputTarget();
-		this.log(`[compiler] Target configuration: ${this.mode === 'processing' ? this.describeProcessingOutputTarget(processingOutput) : 'WebAssembly (Wasm-GC)'}, fast global analysis enabled`);
+		this.log('[compiler] Target configuration: type=WebAssembly (Wasm-GC), fast global analysis enabled');
 
 		try {
-			const artifact = await this.compileCurrentSources();
-			this.buildArtifact = artifact;
+			// collect
+			this.log('\n[compiler] collecting source files...');
+			const collection = await collectSources(this.mode);
+			const { sources } = collection;
+			if (sources.length === 0) {
+				throw new Error(`No ${this.mode === 'processing' ? '.pde' : '.java'} files were found.`);
+			}
+
+			for (const source of sources) {
+				this.log(`[compiler] Found ${source.path} (${countLines(source.content)} lines, ${source.content.length} chars)`);
+			}
+
+			const workspaceFolder = collection.workspaceFolders[0];
+			const entrypoint = identifyEntrypoint(sources, workspaceFolder);
+			if (!entrypoint && sources.length > 1) {
+				throw new Error('Cannot determine program entrypoint for a multi-file project. Use foldername.pde, foldername.java, main.pde, or main.java.');
+			}
+			const mainSource = entrypoint ?? sources[0];
+			this.log(`[compiler] Entrypoint: ${mainSource.path}`);
+
+			const targetFileName = workspaceFolder ? buildArtifactFileName(workspaceFolder) : `${stripExtension(mainSource.path ?? 'sketch')}.compiled.wasm`;
+			const targetUri = workspaceFolder ? buildArtifactFileUri(workspaceFolder) : undefined;
+
+			const wasmBytes = this.mode === 'processing'
+				? await this.compileProcessing(sources, mainSource, targetFileName)
+				: await this.compileJava(sources, mainSource, targetFileName);
+
+			if (targetUri && workspaceFolder) {
+				await vscode.workspace.fs.writeFile(targetUri, wasmBytes);
+				this.buildArtifact = {
+					mode: this.mode,
+					scope: workspaceFolder.uri.toString(),
+					name: targetFileName,
+					uri: targetUri,
+					outdated: false
+				};
+				this.log(`[compiler] Wrote ${targetFileName} (${wasmBytes.byteLength} bytes).`);
+			} else {
+				this.buildArtifact = {
+					mode: this.mode,
+					scope: 'open-tabs',
+					name: targetFileName,
+					bytes: wasmBytes,
+					sourceVersions: sourceVersions(sources),
+					outdated: false
+				};
+				this.log(`[compiler] Stored ${targetFileName} in temporary memory (${wasmBytes.byteLength} bytes).`);
+			}
+
 			this.log(`\n==== BUILD SUCCEEDED in ${formatDuration(Date.now() - startedAt)} ====\n`);
 			await this.refreshState();
 		} catch (error) {
-			this.logCompileError(error);
+			// check if error.issues is exists, then list
+			if (error.issues) {
+				for (const issue of error.issues) {
+					this.log(`[compiler] ${issue.message}`);
+				}
+			} else {
+				this.log(`[compiler] ${error}`);
+			}
+
 			this.log(`\n==== BUILD FAILED in ${formatDuration(Date.now() - startedAt)} ====\n`);
 			void vscode.window.showErrorMessage(vscode.l10n.t('Processing compile failed. See the Processing output channel.'));
 			await this.refreshState();
@@ -156,343 +307,118 @@ class Extension implements vscode.Disposable, ExtensionController {
 		}
 	}
 
+	private async compileProcessing(sources: readonly WorkspaceSource[], mainSource: WorkspaceSource, targetFileName: string): Promise<Uint8Array> {
+		this.log('\n[compiler] Loading Processing compiler...');
+		const processing = await this.loadProcessingCompilerModule();
+		const core = await this.readAsset('processing-core-teavm.jar');
+
+		this.log('[compiler] Compiling Processing sketch...');
+		const generated = await processing.generateProcessingSketch([...sources], {
+			core,
+			sketchName: toJavaIdentifier(stripExtension(mainSource.path ?? 'Sketch'), 'Sketch'),
+			sourceMaps: false,
+			target: 'webassembly',
+			output: 'webassembly',
+			backend: 'canvas2d',
+			optimizationLevel: 'simple',
+			fastGlobalAnalysis: true,
+			worker: false,
+			wasmOutputName: stripWasmExtension(targetFileName),
+			compilerOptions: this.compilerOptions(),
+			onDiagnostic: diagnostic => {
+				this.log(formatDiagnostic(diagnostic));
+			}
+		});
+
+		if (generated.output !== 'wasm-gc' || !generated.wasmBytes) {
+			throw new Error('TeaVM did not produce a valid WebAssembly output.');
+		}
+		if (generated.files?.length) {
+			this.log(`[compiler] Generated files: ${generated.files.join(', ')}`);
+		}
+		return generated.wasmBytes;
+	}
+
+	private async compileJava(sources: readonly WorkspaceSource[], mainSource: WorkspaceSource, targetFileName: string): Promise<Uint8Array> {
+		this.log('\n[compiler] Loading Java compiler...');
+		const module = await this.loadJavaCompilerModule();
+		const compiler = await module.createCompiler(this.compilerOptions());
+		const diagnostics = compiler.onDiagnostic(diagnostic => {
+			this.log(formatDiagnostic(diagnostic));
+		});
+
+		try {
+			for (const source of sources) {
+				compiler.addSource(source.path, source.content);
+			}
+
+			this.log('[compiler] Compiling Java sources...');
+			if (!compiler.compile()) {
+				throw new Error('Java compilation failed.');
+			}
+
+			const mainClass = this.resolveJavaMainClass(compiler.findMainClasses(), mainSource);
+			this.log(`[compiler] Main class: ${mainClass}`);
+			const emitted = compiler.emitWasm({
+				mainClass,
+				outputName: stripWasmExtension(targetFileName),
+				optimizationLevel: 'simple',
+				fastGlobalAnalysis: true
+			});
+
+			if (!emitted.ok || !emitted.bytes) {
+				throw new Error('TeaVM did not produce a valid WebAssembly output.');
+			}
+			if (emitted.files.length) {
+				this.log(`[compiler] Generated files: ${emitted.files.join(', ')}`);
+			}
+			return new Uint8Array(emitted.bytes);
+		} finally {
+			diagnostics.dispose();
+		}
+	}
+
+	private resolveJavaMainClass(mainClasses: readonly string[], mainSource: WorkspaceSource): string {
+		if (mainClasses.length === 0) {
+			throw new Error('No Java main class was found.');
+		}
+		const sourceClass = toJavaIdentifier(stripExtension(mainSource.path ?? 'Main').split('/').pop() ?? 'Main', 'Main');
+		const matched = mainClasses.find(candidate => candidate === sourceClass || candidate.endsWith(`.${sourceClass}`));
+		if (matched) {
+			return matched;
+		}
+		if (mainClasses.length === 1) {
+			return mainClasses[0];
+		}
+		throw new Error(`Multiple Java main classes found: ${mainClasses.join(', ')}. Use main.java or the workspace folder name for the entrypoint.`);
+	}
+
 	async run(): Promise<void> {
 		if (this.compiling || this.running) {
 			return;
 		}
-		if (this.assignment) {
-			return this.runAssignmentTests();
-		}
 
 		await this.refreshState();
-		let artifact = this.buildArtifact;
+		const artifact = this.buildArtifact;
 		if (!artifact || artifact.mode !== this.mode) {
 			void vscode.window.showWarningMessage(vscode.l10n.t('Compile before running.'));
 			await this.refreshState();
 			return;
 		}
 
-		if (artifact.outdated) {
-			await this.compile();
-			await this.refreshState();
-			artifact = this.buildArtifact;
-			if (!artifact || artifact.mode !== this.mode || artifact.outdated) {
-				return;
-			}
-		}
-
+		// run java
 		if (this.mode === 'java') {
-			return this.javaRunner.run(artifact);
+			return this.runJavaInBackground(artifact);
 		}
 
-		await this.runProcessing(artifact);
-	}
-
-	stop(): void {
-		this.runtimePanel?.stop();
-		this.javaRunner.stop();
-		this.setRunning(false);
-	}
-
-	async runAssignmentTests(): Promise<void> {
-		if (this.compiling || this.running || !this.assignment) {
-			return;
-		}
-		await this.refreshState();
-		if (!this.assignment) {
-			return;
-		}
-		this.assignmentReport = {
-			assignment_mode: true,
-			title: 'Test Case Report',
-			running: true,
-			unlocked: false,
-			results: [],
-			message: 'Running assignment tests...'
-		};
-		this.assignmentReportPanel?.update();
-		this.showOutput();
-		this.log('\n==== BEGIN ASSIGNMENT TESTS ====\n');
-
-		try {
-			let artifact = this.buildArtifact;
-			if (!artifact || artifact.mode !== 'java' || artifact.outdated) {
-				await this.compile();
-				artifact = this.buildArtifact;
-			}
-			if (!artifact || artifact.mode !== 'java') {
-				throw new Error('Assignment Java build artifact was not created.');
-			}
-
-			this.setRunning(true);
-			const results: AssignmentCaseResult[] = [];
-			const outputs = new Map<string, string>();
-			for (const test of this.assignment.config.tests) {
-				this.log(`[assignment] Running ${test.id}...`);
-				const run = await this.javaRunner.runForOutput(artifact, test.input);
-				const actual = run.stdout;
-				outputs.set(test.id, actual);
-				const expected = test.visibility === 'visible' ? test.expected_output : undefined;
-				const passed = run.error
-					? false
-					: test.visibility === 'visible'
-						? normalizeOutput(actual) === normalizeOutput(expected ?? '')
-						: test.proof ? await verifyProof(actual, test.proof) : false;
-				results.push({
-					id: test.id,
-					visibility: test.visibility,
-					input: test.visibility === 'visible' || test.show_input ? test.input : undefined,
-					expected_output: expected,
-					actual_output: actual,
-					passed,
-					error: run.error || run.stderr || undefined,
-					diff_available: typeof expected === 'string'
-				});
-			}
-
-			const answerPayload = this.assignment.config.answer_key
-				? await decryptAnswerKey(this.assignment.config.answer_key, this.assignment.config.tests, outputs)
-				: undefined;
-			const unlockedResults = answerPayload?.tests
-				? results.map(result => {
-					const expected_output = result.expected_output ?? answerPayload.tests?.[result.id]?.expected_output;
-					return {
-						...result,
-						expected_output,
-						diff_available: typeof expected_output === 'string'
-					};
-				})
-				: results;
-			const passedCount = unlockedResults.filter(result => result.passed).length;
-			this.assignmentReport = {
-				assignment_mode: true,
-				title: 'Test Case Report',
-				running: false,
-				unlocked: !!answerPayload,
-				results: unlockedResults,
-				message: `${passedCount}/${unlockedResults.length} tests passed${answerPayload ? '; answer key unlocked.' : '.'}`
-			};
-			this.log(`\n==== ASSIGNMENT TESTS COMPLETE: ${passedCount}/${unlockedResults.length} passed ====\n`);
-		} catch (error) {
-			this.assignmentReport = {
-				assignment_mode: true,
-				title: 'Test Case Report',
-				running: false,
-				unlocked: false,
-				results: [],
-				message: `Assignment tests failed: ${error}`
-			};
-			this.log(`[assignment] ${error}`);
-			void vscode.window.showErrorMessage(vscode.l10n.t('Assignment tests failed. See the Processing output channel.'));
-		} finally {
-			this.setRunning(false);
-			this.assignmentReportPanel?.update();
-			await this.refreshState();
-		}
-	}
-
-	async openTestReport(): Promise<void> {
-		if (!this.assignmentReportPanel) {
-			this.assignmentReportPanel = new AssignmentReportPanel(this.context.extensionUri, this, () => {
-				this.assignmentReportPanel = undefined;
-			});
-			return;
-		}
-		this.assignmentReportPanel.reveal();
-	}
-
-	async createAssignment(): Promise<void> {
-		const workspaceFolder = getWorkspaceFolder();
-		if (!workspaceFolder) {
-			void vscode.window.showWarningMessage(vscode.l10n.t('Open a folder before creating an assignment.'));
-			return;
-		}
-		await createAssignmentScaffold(workspaceFolder);
-		await this.refreshState();
-		await this.openAssignmentWorkspace();
-	}
-
-	async editAssignment(): Promise<void> {
-		if (!this.assignment) {
-			void vscode.window.showWarningMessage(vscode.l10n.t('No autograded assignment is loaded.'));
-			return;
-		}
-		if (!this.assignmentEditorPanel) {
-			this.assignmentEditorPanel = new AssignmentEditorPanel(this.context.extensionUri, this.assignment.uri, async () => {
-				await this.refreshState();
-			}, () => {
-				this.assignmentEditorPanel = undefined;
-			});
-		}
-		await this.assignmentEditorPanel.open();
-	}
-
-	async openReference(): Promise<void> {
-		await this.openReferencePanel('Processing Reference', 'https://processing.org/reference/');
-	}
-
-	async openApcsaReference(): Promise<void> {
-		await this.openReferencePanel('APCSA Reference', vscode.Uri.joinPath(this.context.extensionUri, 'media', 'reference', 'ap-computer-science-a-java-quick-reference.pdf'));
-	}
-
-	async openReferenceSheet(): Promise<void> {
-		const selected = await vscode.window.showQuickPick([
-			{
-				label: 'Processing Reference',
-				open: () => this.openReference()
-			},
-			{
-				label: 'APCSA Reference',
-				open: () => this.openApcsaReference()
-			}
-		], {
-			placeHolder: 'Open reference sheet'
-		});
-		await selected?.open();
-	}
-
-	private registerCommands(): void {
-		this.disposables.push(vscode.commands.registerCommand(compileCommand, () => this.compile()));
-		this.disposables.push(vscode.commands.registerCommand(runCommand, () => this.run()));
-		this.disposables.push(vscode.commands.registerCommand(runAssignmentTestsCommand, () => this.runAssignmentTests()));
-		this.disposables.push(vscode.commands.registerCommand(openTestReportCommand, () => this.openTestReport()));
-		this.disposables.push(vscode.commands.registerCommand(createAssignmentCommand, () => this.createAssignment()));
-		this.disposables.push(vscode.commands.registerCommand(editAssignmentCommand, () => this.editAssignment()));
-		this.disposables.push(vscode.commands.registerCommand(stopCommand, () => this.stop()));
-		this.disposables.push(vscode.commands.registerCommand(exportWebsiteCommand, () => this.exportWebsite()));
-		this.disposables.push(vscode.commands.registerCommand(openReferenceCommand, () => this.openReference()));
-		this.disposables.push(vscode.commands.registerCommand(openApcsaReferenceCommand, () => this.openApcsaReference()));
-		this.disposables.push(vscode.commands.registerCommand(openReferenceSheetCommand, () => this.openReferenceSheet()));
-	}
-
-	private registerWorkspaceListeners(): void {
-		this.disposables.push(vscode.workspace.onDidChangeWorkspaceFolders(() => this.refreshState()));
-		this.disposables.push(vscode.workspace.onDidOpenTextDocument(() => this.refreshState()));
-		this.disposables.push(vscode.workspace.onDidChangeTextDocument(() => this.refreshState()));
-		this.disposables.push(vscode.workspace.onDidDeleteFiles(() => this.refreshState()));
-		this.disposables.push(vscode.workspace.onDidCreateFiles(() => this.refreshState()));
-		this.disposables.push(vscode.workspace.onDidChangeConfiguration(event => {
-			if (event.affectsConfiguration('webprocessing.processingOutput')) {
-				void this.refreshState();
-			}
-		}));
-	}
-
-	private async refreshState(): Promise<void> {
-		const workspaceFolder = getWorkspaceFolder();
-		let assignmentErrorMessage: string | undefined;
-		try {
-			this.assignment = await loadAssignment(workspaceFolder);
-		} catch (error) {
-			this.assignment = undefined;
-			assignmentErrorMessage = `Invalid assignment.json: ${error}`;
-			this.assignmentReport = emptyAssignmentReport(assignmentErrorMessage);
-		}
-		if (this.assignment) {
-			this.mode = 'java';
-			this.assignmentReport = this.assignmentReport.assignment_mode ? this.assignmentReport : emptyAssignmentReport('No test results yet.', true);
-			await this.openAssignmentWorkspace();
-		} else {
-			this.assignmentReport = emptyAssignmentReport(assignmentErrorMessage);
-			this.openedAssignmentScope = undefined;
-		}
-		let buildArtifact: BuildArtifact | undefined;
-		if (workspaceFolder) {
-			const wasmUri = buildArtifactFileUri(workspaceFolder, 'wasm');
-			const jsUri = buildArtifactFileUri(workspaceFolder, 'js');
-			const [wasmStat, jsStat] = await Promise.all([statOrUndefined(wasmUri), statOrUndefined(jsUri)]);
-			const output = this.resolveBuildArtifactOutput(wasmStat, jsStat);
-			const stat = output === 'js' ? jsStat : wasmStat;
-			if (output && stat) {
-				const extension = output === 'js' ? 'js' : 'wasm';
-				buildArtifact = {
-					mode: this.mode,
-					scope: workspaceFolder.uri.toString(),
-					name: buildArtifactFileName(workspaceFolder, extension),
-					output,
-					uri: buildArtifactFileUri(workspaceFolder, extension),
-					outdated: await isBuildArtifactOutdated(workspaceFolder, stat.mtime)
-				};
-			}
-		} else if ((this.buildArtifact?.bytes || this.buildArtifact?.text) && this.buildArtifact.sourceVersions) {
-			buildArtifact = {
-				...this.buildArtifact,
-				outdated: isTempBuildArtifactOutdated(this.buildArtifact.sourceVersions)
-			};
-		}
-
-		this.buildArtifact = buildArtifact;
-		await vscode.commands.executeCommand('setContext', 'webprocessing.hasCompiled', !!buildArtifact);
-		await vscode.commands.executeCommand('setContext', 'webprocessing.isCompiling', this.compiling);
-		await vscode.commands.executeCommand('setContext', 'webprocessing.isRunning', this.running);
-		await vscode.commands.executeCommand('setContext', 'webprocessing.assignment_mode', !!this.assignment);
-		this.controlsProvider.update();
-		this.assignmentReportPanel?.update();
-	}
-
-	private async compileCurrentSources(): Promise<BuildArtifact> {
-		this.log('\n[compiler] collecting source files...');
-		const compileMode = this.assignment ? 'java' : this.mode;
-		const collection = await collectSources(compileMode);
-		const { sources } = collection;
-		if (sources.length === 0) {
-			throw new Error(`No ${compileMode === 'processing' ? '.pde' : '.java'} files were found.`);
-		}
-
-		for (const source of sources) {
-			this.log(`[compiler] Found ${source.path} (${countLines(source.content)} lines, ${source.content.length} chars)`);
-		}
-
-		const workspaceFolder = collection.workspaceFolders[0];
-		const entrypoint = this.assignment
-			? sources.find(source => source.path === this.assignment?.config.entrypoint)
-			: identifyEntrypoint(sources, workspaceFolder);
-		if (!entrypoint && sources.length > 1) {
-			throw new Error(this.assignment ? `Assignment entrypoint not found: ${this.assignment.config.entrypoint}` : 'Cannot determine program entrypoint for a multi-file project. Use foldername.pde, foldername.java, main.pde, or main.java.');
-		}
-		const mainSource = entrypoint ?? sources[0];
-		this.log(`[compiler] Entrypoint: ${mainSource.path}`);
-
-		const processingOutput = this.getProcessingOutputTarget();
-		const targetFileName = workspaceFolder ? buildArtifactFileName(workspaceFolder) : `${stripExtension(mainSource.path ?? 'sketch')}.compiled.wasm`;
-		const compiled = await this.compiler.compile(compileMode, sources, mainSource, targetFileName, processingOutput);
-		const targetUri = workspaceFolder ? buildArtifactFileUri(workspaceFolder, compiled.output === 'js' ? 'js' : 'wasm') : undefined;
-
-		if (targetUri && workspaceFolder) {
-			const bytes = compiled.bytes ?? new TextEncoder().encode(compiled.text!);
-			await vscode.workspace.fs.writeFile(targetUri, bytes);
-			this.log(`[compiler] Wrote ${compiled.name} (${bytes.byteLength} bytes, ${compiled.output}).`);
-			return {
-				mode: compileMode,
-				scope: workspaceFolder.uri.toString(),
-				name: compiled.name,
-				output: compiled.output,
-				uri: targetUri,
-				outdated: false
-			};
-		}
-
-		const size = compiled.bytes?.byteLength ?? compiled.text?.length ?? 0;
-		this.log(`[compiler] Stored ${compiled.name} in temporary memory (${size} ${compiled.bytes ? 'bytes' : 'chars'}, ${compiled.output}).`);
-		return {
-			mode: compileMode,
-			scope: 'open-tabs',
-			name: compiled.name,
-			output: compiled.output,
-			bytes: compiled.bytes,
-			text: compiled.text,
-			sourceVersions: sourceVersions(sources),
-			outdated: false
-		};
-	}
-
-	private async runProcessing(artifact: BuildArtifact): Promise<void> {
+		// run processing
 		this.showOutput();
 		if (artifact.outdated) {
 			this.log('[runtime] Warning: Running an outdated executable. The output may not include your latest saved or unsaved changes.');
 		}
 		this.log(`[runtime] Running ${artifact.name}...`);
 
+		// if there's no runtime panel or the current one is not for the workspace folder, create a new one
 		if (!this.runtimePanel || !this.runtimePanel.checkScope(artifact.scope)) {
 			this.runtimePanel?.dispose();
 			this.runtimePanel = new ProcessingRuntimePanel(this.context.extensionUri, artifact.scope, artifact.uri ? getWorkspaceFolder()?.uri : undefined, message => this.handleRuntimeMessage(message), () => {
@@ -501,56 +427,75 @@ class Extension implements vscode.Disposable, ExtensionController {
 			});
 		}
 
-		const output = artifact.output ?? 'wasm-gc';
-		await this.runtimePanel.run(artifact.uri ? { output, uri: artifact.uri } : output === 'js' ? { output, text: artifact.text! } : { output, bytes: artifact.bytes! });
+		const didStartRuntime = await this.runtimePanel.run(artifact.uri ? { uri: artifact.uri } : { bytes: artifact.bytes! });
+		if (!didStartRuntime) {
+			await this.refreshState();
+			return;
+		}
 		this.setRunning(true);
 		await this.refreshState();
 	}
 
-	async exportWebsite(): Promise<void> {
-		if (this.compiling || this.running) {
-			return;
-		}
-		this.setCompiling(true);
+	private async runJavaInBackground(artifact: BuildArtifact): Promise<void> {
 		this.showOutput();
+		if (artifact.outdated) {
+			this.log('[runtime] Warning: Running an outdated executable. The output may not include your latest saved or unsaved changes.');
+		}
+		this.log(`[runtime] Running ${artifact.name}...\n`);
+		this.stopJavaRuntime(false);
+		this.setRunning(true);
+		await this.refreshState();
+
 		try {
-			await this.websiteExporter.export();
+			const runId = ++this.javaRuntimeRunId;
+			this.javaRuntimeRoot = artifact.uri ? getWorkspaceFolder()?.uri : undefined;
+			const sourceBytes = artifact.bytes ?? await vscode.workspace.fs.readFile(artifact.uri!);
+			const wasmBytes = new Uint8Array(sourceBytes);
+			const worker = new Worker(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'java-runtime-worker.js').toString(), {
+				name: 'webprocessing-java-runtime'
+			});
+			this.javaRuntimeWorker = worker;
+			worker.onmessage = event => this.handleJavaRuntimeMessage(runId, event.data);
+			worker.onerror = event => {
+				if (runId !== this.javaRuntimeRunId) {
+					return;
+				}
+				this.log(`[runtime] ${event.message}`);
+				this.stopJavaRuntime(false);
+				this.setRunning(false);
+				void this.refreshState();
+			};
+			worker.postMessage({
+				type: 'run',
+				runtimeUri: this.assetImportUri('compiler.wasm-runtime.js'),
+				compilerUri: this.assetImportUri('teavm-javac.js'),
+				wasmBytes
+			}, [wasmBytes.buffer]);
 		} catch (error) {
-			this.logCompileError(error);
-			void vscode.window.showErrorMessage(vscode.l10n.t('Website export failed. See the Processing output channel.'));
-		} finally {
-			this.setCompiling(false);
+			this.log(`[runtime] ${error}`);
+			void vscode.window.showErrorMessage(vscode.l10n.t('Java runtime failed. See the Processing output channel.'));
+			this.setRunning(false);
 			await this.refreshState();
 		}
 	}
 
-	private getProcessingOutputTarget(): ProcessingOutputTarget {
-		return 'auto';
+	stop(): void {
+		const stoppedProcessingRuntime = this.mode === 'processing' && this.running && !!this.runtimePanel;
+		this.runtimePanel?.stop();
+		this.stopJavaRuntime();
+		if (stoppedProcessingRuntime) {
+			this.showOutput();
+			this.log('[runtime] Runtime stopped.');
+		}
+		this.setRunning(false);
 	}
 
-	private resolveBuildArtifactOutput(wasmStat: vscode.FileStat | undefined, jsStat: vscode.FileStat | undefined): BuildOutputKind | undefined {
-		if (this.mode === 'java') {
-			return wasmStat ? 'wasm-gc' : undefined;
-		}
-		switch (this.getProcessingOutputTarget()) {
-			case 'js':
-				return jsStat ? 'js' : undefined;
-			case 'wasm-gc':
-				return wasmStat ? 'wasm-gc' : undefined;
-			default:
-				return jsStat && (!wasmStat || jsStat.mtime > wasmStat.mtime) ? 'js' : wasmStat ? 'wasm-gc' : undefined;
-		}
+	async openReference(): Promise<void> {
+		await this.openReferencePanel('Processing Reference', 'https://processing.org/reference/');
 	}
 
-	private describeProcessingOutputTarget(output: ProcessingOutputTarget): string {
-		switch (output) {
-			case 'js':
-				return 'JavaScript';
-			case 'wasm-gc':
-				return 'WebAssembly (Wasm-GC)';
-			default:
-				return 'Auto (Wasm-GC with JavaScript fallback)';
-		}
+	async openApcsaReference(): Promise<void> {
+		await this.openReferencePanel('APCSA Reference', vscode.Uri.joinPath(this.context.extensionUri, 'media', 'reference', 'ap-computer-science-a-java-quick-reference.html'));
 	}
 
 	private async openReferencePanel(title: string, source: string | vscode.Uri): Promise<void> {
@@ -562,38 +507,98 @@ class Extension implements vscode.Disposable, ExtensionController {
 		await this.referencePanel.open(title, source);
 	}
 
-	getAssignmentReportState(): AssignmentReportState {
-		return this.assignment ? this.assignmentReport : emptyAssignmentReport();
+	private handleJavaRuntimeMessage(runId: number, message: { readonly type?: string; readonly text?: string; readonly requestId?: number; readonly path?: string; readonly mode?: string; readonly content?: Uint8Array }): void {
+		if (runId !== this.javaRuntimeRunId) {
+			return;
+		}
+		switch (message.type) {
+			case 'file-open':
+				void this.replyJavaRuntimeFileOpen(message.requestId, message.path);
+				break;
+			case 'file-write':
+			case 'file-close':
+				void this.writeJavaRuntimeFile(message.path, message.content);
+				break;
+			case 'stdout':
+			case 'stderr':
+				this.showOutput();
+				this.appendOutput(message.text ?? '');
+				break;
+			case 'log':
+				this.showOutput();
+				this.log(`${message.text ?? ''}`);
+				break;
+			case 'finished':
+				this.showOutput();
+				this.log('[runtime] Runtime finished.');
+				this.stopJavaRuntime(false);
+				this.setRunning(false);
+				void this.refreshState();
+				break;
+			case 'error':
+				this.showOutput();
+				this.log(`[runtime] ${message.text ?? 'Runtime failed.'}`);
+				this.stopJavaRuntime(false);
+				this.setRunning(false);
+				void this.refreshState();
+				void vscode.window.showErrorMessage(vscode.l10n.t('Java runtime failed. See the Processing output channel.'));
+				break;
+		}
 	}
 
-	async diffAssignmentTest(id: string): Promise<void> {
-		const result = this.assignmentReport.results.find(result => result.id === id);
-		if (!result || typeof result.expected_output !== 'string') {
+	private async writeJavaRuntimeFile(path: string | undefined, content: Uint8Array | undefined): Promise<void> {
+		if (!path || !content) {
 			return;
 		}
-		const expectedUri = vscode.Uri.parse(`webprocessing-assignment:/${encodeURIComponent(id)}.expected.txt`);
-		const actualUri = vscode.Uri.parse(`webprocessing-assignment:/${encodeURIComponent(id)}.actual.txt`);
-		this.assignmentDocuments.set(expectedUri, result.expected_output);
-		this.assignmentDocuments.set(actualUri, result.actual_output);
-		await vscode.commands.executeCommand('vscode.diff', expectedUri, actualUri, `${id}: Expected ↔ Actual`);
+		try {
+			await writeRuntimeFile(this.javaRuntimeRoot, path, content);
+		} catch (error) {
+			this.showOutput();
+			this.log(`[runtime] ${error}`);
+		}
 	}
 
-	private async openAssignmentWorkspace(): Promise<void> {
-		if (!this.assignment) {
-			this.openedAssignmentScope = undefined;
+	private async replyJavaRuntimeFileOpen(requestId: number | undefined, path: string | undefined): Promise<void> {
+		const worker = this.javaRuntimeWorker;
+		if (requestId === undefined || !path || !worker) {
 			return;
 		}
-		const scope = `${this.assignment.uri.toString()}@${this.assignment.config.student_code}@${this.assignment.config.instructions}`;
-		if (this.openedAssignmentScope === scope) {
+		try {
+			const bytes = await openRuntimeFile(this.javaRuntimeRoot, path);
+			if (this.javaRuntimeWorker === worker) {
+				worker.postMessage({ type: 'file-response', requestId, path, bytes }, [bytes.buffer]);
+			}
+		} catch (error) {
+			if (this.javaRuntimeWorker === worker) {
+				worker.postMessage({ type: 'file-response', requestId, path, ...runtimeFileErrorPayload(error) });
+			}
+		}
+	}
+
+	private stopJavaRuntime(log = true): void {
+		if (!this.javaRuntimeWorker) {
 			return;
 		}
-		this.openedAssignmentScope = scope;
-		await vscode.window.showTextDocument(assignmentPath(this.assignment, this.assignment.config.student_code), {
-			viewColumn: vscode.ViewColumn.One,
-			preview: false
-		});
-		await vscode.commands.executeCommand('markdown.showPreviewToSide', assignmentPath(this.assignment, this.assignment.config.instructions));
-		await this.openTestReport();
+		this.javaRuntimeRunId++;
+		this.javaRuntimeWorker.terminate();
+		this.javaRuntimeWorker = undefined;
+		this.javaRuntimeRoot = undefined;
+		if (log) {
+			this.showOutput();
+			this.log('[runtime] Runtime stopped.');
+		}
+	}
+
+	private setCompiling(compiling: boolean): void {
+		this.compiling = compiling;
+		void vscode.commands.executeCommand('setContext', 'webprocessing.isCompiling', compiling);
+		this.controlsProvider.update();
+	}
+
+	private setRunning(running: boolean): void {
+		this.running = running;
+		void vscode.commands.executeCommand('setContext', 'webprocessing.isRunning', running);
+		this.controlsProvider.update();
 	}
 
 	private handleRuntimeMessage(message: RuntimeMessage): void {
@@ -620,66 +625,299 @@ class Extension implements vscode.Disposable, ExtensionController {
 		}
 	}
 
-	private logCompileError(error: unknown): void {
-		if (hasIssues(error)) {
-			for (const issue of error.issues) {
-				this.log(`[compiler] ${issue.message}`);
+	private async loadProcessingCompilerModule(): Promise<ProcessingModule> {
+		if (!this.processingCompilerModule) {
+			this.processingCompilerModule = importModule<ProcessingModule>(this.assetImportUri('processing-teavm.js'));
+		}
+		return this.processingCompilerModule;
+	}
+
+	private async loadJavaCompilerModule(): Promise<CompilerModule> {
+		if (!this.javaCompilerModule) {
+			this.javaCompilerModule = importModule<CompilerModule>(this.assetImportUri('teavm-javac.js'));
+		}
+		return this.javaCompilerModule;
+	}
+
+	private async readAsset(name: string): Promise<Uint8Array> {
+		return vscode.workspace.fs.readFile(this.assetUri(name));
+	}
+
+	private compilerOptions(): import('../lib/teavm-javac/teavm-javac.js').CreateCompilerOptions {
+		return {
+			compilerWasmUrl: this.assetUri('compiler.wasm').toString(),
+			compilerWasmRuntimeUrl: this.assetImportUri('compiler.wasm-runtime.js'),
+			javacClasslibUrl: this.assetUri('compile-classlib-teavm.bin').toString(),
+			runtimeClasslibUrl: this.assetUri('runtime-classlib-teavm.bin').toString(),
+			fallbackToJs: false
+		};
+	}
+
+	private assetUri(name: string): vscode.Uri {
+		return vscode.Uri.joinPath(this.context.extensionUri, 'lib', 'teavm-javac', name);
+	}
+
+	private assetImportUri(name: string): string {
+		return this.assetUri(name).toString();
+	}
+}
+
+type controlsMessage =
+	| { readonly type: 'compile' }
+	| { readonly type: 'run' }
+	| { readonly type: 'stop' }
+	| { readonly type: 'openReference' }
+	| { readonly type: 'openApcsaReference' }
+	| { readonly type: 'mode'; readonly mode: SourceKind };
+
+// stuff in left side bar
+class ExtensionControlsProvider implements vscode.WebviewViewProvider {
+	private view: vscode.WebviewView | undefined;
+	constructor(
+		private readonly extensionUri: vscode.Uri,
+		private readonly controller: Extension
+	) { }
+
+	async resolveWebviewView(webviewView: vscode.WebviewView): Promise<void> {
+		this.view = webviewView;
+		webviewView.webview.options = { enableScripts: true };
+		webviewView.webview.html = await this.getHtml(this.getViewState());
+		webviewView.webview.onDidReceiveMessage(message => this.handleMessage(message));
+	}
+
+	update(): void {
+		void this.view?.webview.postMessage({ type: 'state', state: this.getViewState() });
+	}
+
+	private handleMessage(message: controlsMessage): void {
+		switch (message.type) {
+			case 'compile':
+				void this.controller.compile();
+				break;
+			case 'run':
+				void this.controller.run();
+				break;
+			case 'stop':
+				this.controller.stop();
+				break;
+			case 'openReference':
+				void this.controller.openReference();
+				break;
+			case 'openApcsaReference':
+				void this.controller.openApcsaReference();
+				break;
+			case 'mode':
+				this.controller.setMode(message.mode);
+				break;
+		}
+	}
+
+	private getViewState(): ExtensionControlsViewState {
+		const state = this.controller.getState();
+		const status = !state.hasSources
+			? `Open a ${state.mode === 'processing' ? 'Processing' : 'Java'} source file.`
+			: state.isCompiling
+				? 'Compiling sketch...'
+				: state.isRunning
+					? 'Running sketch...'
+					: state.hasCompiled
+						? 'Ready to run.'
+						: 'Compile a sketch to create a WebAssembly executable.';
+		return {
+			...state,
+			status,
+			warning: state.hasCompiled && state.isOutdated ? 'Warning: outdated executable.' : '',
+		};
+	}
+
+	// generate the HTML content for the control panel
+	private async getHtml(state: ExtensionControlsViewState): Promise<string> {
+		const nonce = createNonce();
+		const initialState = escapeScriptJson(JSON.stringify(state));
+		return renderTemplate(await readTemplate(this.extensionUri, 'processing-controls.html'), {
+			nonce,
+			initialState
+		});
+	}
+}
+
+type RuntimeMessage =
+	| { readonly type: 'log-raw'; readonly text: string; readonly runId?: number }
+	| { readonly type: 'stdout'; readonly text: string; readonly runId?: number }
+	| { readonly type: 'stderr'; readonly text: string; readonly runId?: number }
+	| { readonly type: 'started'; readonly runId?: number }
+	| { readonly type: 'stopped'; readonly runId?: number }
+	| { readonly type: 'file-open'; readonly requestId?: number; readonly path?: string; readonly runId?: number }
+	| { readonly type: 'file-write'; readonly path?: string; readonly content?: Uint8Array; readonly runId?: number }
+	| { readonly type: 'file-close'; readonly path?: string; readonly mode?: string; readonly content?: Uint8Array | null; readonly runId?: number };
+
+type RuntimeSource =
+	| { readonly uri: vscode.Uri }
+	| { readonly bytes: Uint8Array };
+
+// a panel to show execution outcome
+class ProcessingRuntimePanel implements vscode.Disposable {
+	private readonly panel: vscode.WebviewPanel;
+	private pendingBytes: Uint8Array | undefined;
+	private runId = 0;
+
+	constructor(
+		private readonly extensionUri: vscode.Uri,
+		private readonly scope: string,
+		private readonly localRoot: vscode.Uri | undefined,
+		private readonly onMessage: (message: RuntimeMessage) => void,
+		onDispose: () => void
+	) {
+		this.panel = vscode.window.createWebviewPanel(runtimeViewType, 'Processing Runtime', vscode.ViewColumn.Beside, {
+			enableScripts: true,
+			retainContextWhenHidden: true,
+			localResourceRoots: localRoot
+				? [vscode.Uri.joinPath(extensionUri, 'lib', 'teavm-javac'), localRoot]
+				: [vscode.Uri.joinPath(extensionUri, 'lib', 'teavm-javac')]
+		});
+		this.panel.webview.onDidReceiveMessage(message => {
+			if (message?.runId !== undefined && message.runId !== this.runId) {
+				return;
 			}
+			if (message?.type === 'readyForWasm') {
+				if (this.pendingBytes) {
+					void this.panel.webview.postMessage({ type: 'wasmBytes', bytes: this.pendingBytes });
+				}
+				return;
+			}
+			if (message?.type === 'file-open') {
+				void this.replyFileOpen(message.requestId, message.path);
+				return;
+			}
+			if (message?.type === 'file-write' || message?.type === 'file-close') {
+				void this.writeFile(message.path, message.content ?? undefined);
+				return;
+			}
+			this.onMessage(message);
+		});
+		this.panel.onDidDispose(onDispose);
+	}
+
+	checkScope(scope: string): boolean {
+		return this.scope === scope;
+	}
+
+	dispose(): void {
+		this.panel.dispose();
+	}
+
+	async run(source: RuntimeSource): Promise<boolean> {	// fill in the webview to run the sketch
+		this.panel.reveal(vscode.ViewColumn.Beside);
+		this.pendingBytes = 'bytes' in source ? source.bytes : undefined;
+		const runId = ++this.runId;
+		const html = await this.getHtml('uri' in source ? source.uri : undefined, runId);
+		if (runId !== this.runId) {
+			return false;
+		}
+		this.panel.webview.html = html;
+		return true;
+	}
+
+	stop(): void {	// tell the runner inside of webview to shut
+		this.runId++;
+		this.pendingBytes = undefined;
+		this.panel.webview.html = this.getStoppedHtml();
+	}
+
+	private async replyFileOpen(requestId: number | undefined, path: string | undefined): Promise<void> {
+		if (requestId === undefined || !path) {
 			return;
 		}
-		this.log(`[compiler] ${error}`);
+		try {
+			const bytes = await openRuntimeFile(this.localRoot, path);
+			await this.panel.webview.postMessage({ type: 'file-response', requestId, path, bytes });
+		} catch (error) {
+			await this.panel.webview.postMessage({ type: 'file-response', requestId, path, ...runtimeFileErrorPayload(error) });
+		}
 	}
 
-	private setCompiling(compiling: boolean): void {
-		this.compiling = compiling;
-		void vscode.commands.executeCommand('setContext', 'webprocessing.isCompiling', compiling);
-		this.controlsProvider.update();
-	}
-
-	private setRunning(running: boolean): void {
-		this.running = running;
-		void vscode.commands.executeCommand('setContext', 'webprocessing.isRunning', running);
-		this.controlsProvider.update();
-	}
-
-	private showOutput(): void {
-		this.output.show(true);
-	}
-
-	private log(message = ''): void {
-		this.output.appendLine(message);
-	}
-
-	private appendOutput(message = ''): void {
-		this.output.append(message);
-	}
-
-	private async openControlView(): Promise<void> {
-		if (this.context.globalState.get<boolean>(defaultOpenStateKey)) {
+	private async writeFile(path: string | undefined, content: Uint8Array | undefined): Promise<void> {
+		if (!path || !content) {
 			return;
 		}
-		await this.context.globalState.update(defaultOpenStateKey, true);
-		await new Promise(resolve => setTimeout(resolve, 500));
-		await vscode.commands.executeCommand(`${controlsViewType}.focus`);
+		try {
+			await writeRuntimeFile(this.localRoot, path, content);
+		} catch (error) {
+			this.onMessage({ type: 'log-raw', text: `${error}`, runId: this.runId });
+		}
+	}
+
+	// generate the HTML content for the runtime panel
+	private async getHtml(wasmUri: vscode.Uri | undefined, runId: number): Promise<string> {
+		const nonce = createNonce();
+		const payload = escapeScriptJson(JSON.stringify({
+			runId,
+			wasmUri: wasmUri ? this.panel.webview.asWebviewUri(wasmUri).toString() : '',
+			wasmRuntimeUri: this.panel.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'lib', 'teavm-javac', 'compiler.wasm-runtime.js')).toString(),
+			processingUri: this.panel.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'lib', 'teavm-javac', 'processing-teavm.js')).toString()
+		}));
+		return renderTemplate(await readTemplate(this.extensionUri, 'processing-runtime.html'), {
+			nonce,
+			payload,
+			cspSource: this.panel.webview.cspSource
+		});
+	}
+
+	private getStoppedHtml(): string {
+		return `<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<style>
+		html, body { height: 100%; margin: 0; overflow: hidden; background: var(--vscode-editor-background); color: var(--vscode-descriptionForeground); font-family: var(--vscode-font-family); }
+		body { display: grid; place-items: end start; }
+		#status { width: 100%; box-sizing: border-box; border-top: 1px solid var(--vscode-panel-border); padding: 6px 8px; font-size: 12px; }
+	</style>
+</head>
+<body>
+	<div id="status">Stopped.</div>
+</body>
+</html>`;
 	}
 }
 
-function hasIssues(error: unknown): error is { readonly issues: readonly { readonly message: string }[] } {
-	return typeof error === 'object' && error !== null && Array.isArray((error as { readonly issues?: unknown }).issues);
-}
+class ProcessingReferencePanel implements vscode.Disposable {
+	private readonly panel: vscode.WebviewPanel;
 
-function extensionVersion(context: vscode.ExtensionContext): string {
-	const packageJson = context.extension.packageJSON as { readonly version?: unknown };
-	return typeof packageJson.version === 'string' ? packageJson.version : 'unknown version';
-}
+	constructor(
+		private readonly extensionUri: vscode.Uri,
+		onDispose: () => void
+	) {
+		this.panel = vscode.window.createWebviewPanel(referenceViewType, 'Reference', vscode.ViewColumn.Beside, {
+			enableScripts: true,
+			retainContextWhenHidden: true,
+			localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'media')]
+		});
+		this.panel.onDidDispose(onDispose);
+	}
 
-function emptyAssignmentReport(message = 'No autograded assignment is loaded.', assignment_mode = false): AssignmentReportState {
-	return {
-		assignment_mode,
-		title: 'Test Case Report',
-		running: false,
-		unlocked: false,
-		results: [],
-		message
-	};
+	dispose(): void {
+		this.panel.dispose();
+	}
+
+	async open(title: string, source: string | vscode.Uri): Promise<void> {
+		this.panel.title = title;
+		this.panel.reveal(vscode.ViewColumn.Beside);
+		this.panel.webview.html = await this.getHtml(title, source);
+	}
+
+	private async getHtml(title: string, source: string | vscode.Uri): Promise<string> {
+		const nonce = createNonce();
+		const payload = escapeScriptJson(JSON.stringify({
+			title,
+			url: typeof source === 'string' ? source : this.panel.webview.asWebviewUri(source).toString()
+		}));
+		return renderTemplate(await readTemplate(this.extensionUri, 'processing-reference.html'), {
+			nonce,
+			payload,
+			cspSource: this.panel.webview.cspSource
+		});
+	}
 }

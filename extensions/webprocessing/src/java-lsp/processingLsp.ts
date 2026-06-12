@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { collectSources, identifyEntrypoint, isInWorkspaceFolder, isJavaUri, isProcessingUri, type WorkspaceSource } from '../utils';
+import { collectSources, identifyEntrypoint, isInWorkspaceFolder, isJavaUri, isProcessingUri, type WorkspaceSource } from './utils';
 
 declare function setTimeout(handler: (...args: unknown[]) => void, timeout?: number): unknown;
 declare function clearTimeout(handle: unknown): void;
@@ -118,7 +118,7 @@ interface LspSignatureHelp {
 	readonly activeParameter?: number;
 }
 
-export class ProcessingLanguageService implements vscode.Disposable {
+export class ProcessingLinter implements vscode.Disposable {
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly diagnostics = vscode.languages.createDiagnosticCollection('webprocessing');
 	private jdtWasm: Promise<JdtWasmExports> | undefined;

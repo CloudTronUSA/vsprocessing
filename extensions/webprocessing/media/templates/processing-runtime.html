@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 	<meta charset="UTF-8">
-	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; script-src 'nonce-{{nonce}}' 'unsafe-eval' 'wasm-unsafe-eval' blob: {{cspSource}}; connect-src {{cspSource}};">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; script-src 'nonce-{{nonce}}' 'unsafe-eval' 'wasm-unsafe-eval' {{cspSource}}; connect-src {{cspSource}};">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<style>
 		html, body { height: 100%; margin: 0; overflow: hidden; background: var(--vscode-editor-background); color: var(--vscode-foreground); font-family: var(--vscode-font-family); }
@@ -31,23 +31,19 @@
 		// if not, we know the user has stopped or restarted the sketch, so we abort starting.
 		let generation = 0;
 
-		let p5Instance;
+		let canvasBackend;
 		let program;
 		let sketchInstance;
 		let canvasObserver;
 		let resolveWasmBytes;
-		let resolveJsText;
-		let fileRequestId = 0;
-		const fileRequests = new Map();
+		let nextHostRequestId = 1;
+		const hostRequests = new Map();
 
 		const wasmBytesFromHost = new Promise(resolve => {
 			resolveWasmBytes = resolve;
 		});
-		const jsTextFromHost = new Promise(resolve => {
-			resolveJsText = resolve;
-		});
 
-		const send = message => vscode.postMessage(message);
+		const send = message => vscode.postMessage({ ...message, runId: payload.runId });
 
 		// error handling stuff
 		const convToString = value => {
@@ -61,8 +57,10 @@
 
 			const header = value.name + ': ' + value.message;
 			const stack = String(value.stack);
-			return stack.startsWith(value.name) || stack.startsWith(header)
-				? stack	// this is a V8 error, stack already looks good
+			return stack.startsWith(value.name)
+				? stack.startsWith(header) 	// v8 errors
+				    ? stack	// first line of stack already includes the error
+					: header + '\n' + stack.split('\n').slice(1).join('\n')	// first line is bad, strip first line
 				: header + '\n' + stack.split('\n').map(line => line ? '    ' + line : line).join('\n');	// gross firefox/safari
 		};
 		const formatConsoleLog = value => {
@@ -111,62 +109,24 @@
 				stop();
 			} else if (event.data?.type === 'wasmBytes') {
 				resolveWasmBytes(new Uint8Array(event.data.bytes));
-			} else if (event.data?.type === 'jsText') {
-				resolveJsText(event.data.text || '');
-			} else if (event.data?.type === 'fileResponse') {
-				const request = fileRequests.get(event.data.id);
+			} else if (event.data?.type === 'file-response') {
+				const request = hostRequests.get(event.data.requestId);
 				if (request) {
-					fileRequests.delete(event.data.id);
-					if (event.data.ok) {
-						request.resolve(new Response(event.data.bytes || new ArrayBuffer(0), {
-							status: 200,
-							headers: { 'Content-Type': event.data.mime || 'application/octet-stream' }
-						}));
+					hostRequests.delete(event.data.requestId);
+					if (event.data.error) {
+						const error = new Error(event.data.error);
+						error.name = event.data.errorName || 'Error';
+						request.reject(error);
 					} else {
-						request.resolve(new Response(event.data.error || 'Not Found', { status: 404 }));
+						request.resolve(event.data);
 					}
 				}
 			}
 		});
 
-		const originalFetch = window.fetch.bind(window);
-		window.fetch = (input, init) => {
-			const runtimePath = getRuntimeFilePath(input);
-			return runtimePath ? fetchRuntimeFile(runtimePath) : originalFetch(input, init);
-		};
-
 		// set up other stuff, notify ready
 		window.addEventListener('resize', fitCanvas);
-		send({ type: 'readyForArtifact' });
-
-		function getRuntimeFilePath(input) {
-			const value = typeof input === 'string' ? input : input?.url;
-			if (!value || value.startsWith('blob:') || value.startsWith('data:')) {
-				return '';
-			}
-			try {
-				const url = new URL(value, location.href);
-				if (url.origin !== location.origin) {
-					return '';
-				}
-				const marker = '/pre/';
-				const markerIndex = url.pathname.indexOf(marker);
-				if (markerIndex >= 0) {
-					return decodeURIComponent(url.pathname.slice(markerIndex + marker.length));
-				}
-				return value.includes(':') || value.startsWith('/') ? '' : value;
-			} catch {
-				return value.includes(':') || value.startsWith('/') ? '' : value;
-			}
-		}
-
-		function fetchRuntimeFile(path) {
-			const id = ++fileRequestId;
-			send({ type: 'fileRequest', id, path });
-			return new Promise((resolve, reject) => {
-				fileRequests.set(id, { resolve, reject });
-			});
-		}
+		send({ type: 'readyForWasm' });
 
 		function stop() {
 			generation++;
@@ -180,12 +140,12 @@
 				sketchInstance?.dispose?.();
 				sketchInstance?.destroy?.();
 				sketchInstance?.stop?.();
-				p5Instance?.remove?.();
+				canvasBackend?.noLoop?.();
 			} catch (error) {
 				console.warn(error);
 			}
 			sketchInstance = undefined;
-			p5Instance = undefined;
+			canvasBackend = undefined;
 			program = undefined;
 			canvasObserver?.disconnect();
 			canvasObserver = undefined;
@@ -218,92 +178,101 @@
 			requestAnimationFrame(fitCanvas);
 		}
 
+		function requestHost(type, payload = {}) {
+			const requestId = nextHostRequestId++;
+			send({ ...payload, type, requestId });
+			return new Promise((resolve, reject) => hostRequests.set(requestId, { resolve, reject }));
+		}
+
+		function toBytes(value) {
+			return value instanceof Uint8Array ? value : new Uint8Array(value);
+		}
+
+		function isRelativeFetchInput(input) {
+			const value = typeof input === 'string'
+				? input
+				: input instanceof URL
+					? input.href
+					: input?.url;
+			return typeof value === 'string'
+				&& !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)
+				&& !value.startsWith('//');
+		}
+
+		function fetchPath(input) {
+			const value = typeof input === 'string'
+				? input
+				: input instanceof URL
+					? input.href
+					: input.url;
+			return value.replace(/^\.\/+/, '').replace(/[?#].*$/, '');
+		}
+
+		function installRuntimeFetch() {
+			const originalFetch = globalThis.fetch.bind(globalThis);
+			globalThis.fetch = async (input, init) => {
+				if (!isRelativeFetchInput(input)) {
+					return originalFetch(input, init);
+				}
+				try {
+					const response = await requestHost('file-open', { path: fetchPath(input) });
+					return new Response(toOpenResult(response), { status: 200 });
+				} catch (error) {
+					if (error?.name === 'FileNotFoundError') {
+						return new Response('', { status: 404, statusText: 'Not Found' });
+					}
+					throw error;
+				}
+			};
+		}
+
+		function toOpenResult(response) {
+			return response.bytes == null ? response.bytes : toBytes(response.bytes);
+		}
+
+		function programOptions(runtimeModule) {
+			return {
+				runtimeModule,
+				stdio: {
+					stdin: '',
+					stdout: text => send({ type: 'stdout', text }),
+					stderr: text => send({ type: 'stderr', text })
+				},
+				fs: {
+					onFileWrite: (path, content) => send({ type: 'file-write', path, content }),
+					onFileClose: (path, mode, content) => send({ type: 'file-close', path, mode, content })
+				}
+			};
+		}
+
 		async function run() {
 			stop();
 			const current = ++generation;
 			status.textContent = 'Starting...';
 
 			// fetch files
-			const [runtimeModule, processingModule, artifactResponse] = await Promise.all([
-				payload.output === 'wasm-gc' ? import(payload.wasmRuntimeUri) : Promise.resolve(undefined),
-				payload.output === 'wasm-gc' ? import(payload.processingUri) : Promise.resolve(undefined),
-				payload.output === 'wasm-gc' && payload.artifactUri ? fetch(payload.artifactUri) : Promise.resolve(undefined)
+			const [runtimeModule, processingModule, wasmResponse] = await Promise.all([
+				import(payload.wasmRuntimeUri),
+				import(payload.processingUri),
+				payload.wasmUri ? fetch(payload.wasmUri) : Promise.resolve(undefined)
 			]);
-			if (payload.output === 'js') {
-				await loadP5();
-			}
 			if (current !== generation) return;
-			if (artifactResponse && !artifactResponse.ok) {
-				throw new Error('Failed to load compiled WebAssembly: HTTP ' + artifactResponse.status);
+			if (wasmResponse && !wasmResponse.ok) {
+				throw new Error('Failed to load compiled WebAssembly: HTTP ' + wasmResponse.status);
 			}
-
-			if (payload.output === 'wasm-gc') {
-				await runWasmSketch(runtimeModule, processingModule, artifactResponse);
-				return;
-			}
-
-			const start = (await importJsSketch()).start;
-			if (typeof start !== 'function') {
-				throw new Error('Compiled Processing sketch did not export start.');
-			}
-
-			await new Promise((resolve, reject) => {
-				p5Instance = new window.p5(p => {
-					p.setup = () => {
-						try {
-							sketchInstance = start(p);
-							watchCanvasSize();
-							status.textContent = 'Running...';
-							send({ type: 'log-raw', text: '[runtime] Render backend used: p5' });
-							send({ type: 'started' });
-							resolve();
-						} catch (error) {
-							reject(error);
-						}
-					};
-				}, sketch);
-			});
-		}
-
-		async function runWasmSketch(runtimeModule, processingModule, wasmResponse) {
+			// host can set the wasm bytes directly. so we can load from that too.
 			const wasmBytes = wasmResponse ? new Uint8Array(await wasmResponse.arrayBuffer()) : await wasmBytesFromHost;
-			program = await processingModule.createProcessingProgram(wasmBytes, {
-				runtimeModule,
-				stdio: {
-					stdin: '',
-					stdout: text => send({ type: 'stdout', text }),
-					stderr: text => send({ type: 'stderr', text })
-				}
-			});
-			const canvasBackend = processingModule.createCanvas2DBackend(sketch, {});
+			installRuntimeFetch();
+
+			// load program, create canvas backend and start sketch
+			program = await processingModule.createProcessingProgram(wasmBytes, programOptions(runtimeModule));
+			if (current !== generation) return;
+			canvasBackend = processingModule.createCanvas2DBackend(sketch, {});
 			sketchInstance = program.execute({ canvasBackend });
-			watchCanvasSize();
-			status.textContent = 'Running...';
-			send({ type: 'started' });
-		}
-
-		async function loadP5() {
-			if (typeof window.p5 === 'function') {
-				return;
-			}
-			await new Promise((resolve, reject) => {
-				const script = document.createElement('script');
-				script.src = payload.p5Uri;
-				script.onload = resolve;
-				script.onerror = () => reject(new Error('Failed to load p5.js.'));
-				document.head.appendChild(script);
-			});
-		}
-
-		async function importJsSketch() {
-			if (payload.artifactUri) {
-				return import(payload.artifactUri);
-			}
-			const moduleUrl = URL.createObjectURL(new Blob([await jsTextFromHost], { type: 'text/javascript' }));
-			try {
-				return await import(moduleUrl);
-			} finally {
-				URL.revokeObjectURL(moduleUrl);
+			if (canvasBackend.canvas) {
+				watchCanvasSize();
+				status.textContent = 'Running...';
+				send({ type: 'started' });
 			}
 		}
 		run().catch(error => {	// this is for any error that occurs BEFORE processing actually runs
