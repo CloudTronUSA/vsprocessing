@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { CreateCompilerOptions } from '@worldeditaxe/teavm-javac';
+import type { CreateCompilerOptions } from '../../lib/teavm-javac/teavm-javac.js';
 import type { BuildOutputKind, ProcessingOutputTarget } from '../core/types';
 import { TeaVmPackage } from './teavmPackage';
 import {
@@ -50,13 +50,13 @@ export class ProcessingCompiler {
 			sourceMaps: false,
 			target: processingOutput,
 			output: processingOutput,
-			backend: 'p5',
+			backend: 'canvas2d',
 			optimizationLevel: 'simple',
 			fastGlobalAnalysis: true,
 			worker: false,
 			wasmOutputName: stripWasmExtension(targetFileName),
 			fallbackToJs: processingOutput === 'auto',
-			compilerOptions: this.compilerOptions(processingOutput),
+			compilerOptions: this.compilerOptions(),
 			onDiagnostic: diagnostic => {
 				this.log(formatDiagnostic(diagnostic));
 			}
@@ -96,7 +96,7 @@ export class ProcessingCompiler {
 	private async compileJava(sources: readonly WorkspaceSource[], mainSource: WorkspaceSource, targetFileName: string): Promise<CompilerOutput> {
 		this.log('\n[compiler] Loading Java compiler...');
 		const module = await this.teavm.compiler();
-		const compiler = await module.createCompiler(this.compilerOptions('wasm-gc'));
+		const compiler = await module.createCompiler(this.compilerOptions());
 		const diagnostics = compiler.onDiagnostic(diagnostic => {
 			this.log(formatDiagnostic(diagnostic));
 		});
@@ -158,15 +158,14 @@ export class ProcessingCompiler {
 			: source.path.split('/').pop() ?? source.path;
 	}
 
-	private compilerOptions(output: ProcessingOutputTarget): CreateCompilerOptions {
+	private compilerOptions(): CreateCompilerOptions {
 		return {
-			backend: output === 'js' ? 'js' : output === 'auto' ? 'auto' : 'wasm-gc',
-			compilerJsUrl: this.assetImportUri('compiler.module.js'),
+			backend: 'wasm-gc',
 			compilerWasmUrl: this.assetUri('compiler.wasm').toString(),
 			compilerWasmRuntimeUrl: this.assetImportUri('compiler.wasm-runtime.js'),
 			javacClasslibUrl: this.assetUri('compile-classlib-teavm.bin').toString(),
 			runtimeClasslibUrl: this.assetUri('runtime-classlib-teavm.bin').toString(),
-			fallbackToJs: output === 'js'
+			fallbackToJs: false
 		};
 	}
 }

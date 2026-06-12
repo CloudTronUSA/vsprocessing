@@ -6,8 +6,6 @@ self.onmessage = event => {
 
 const send = message => self.postMessage(message);
 let currentCapture = false;
-let inputBytes = new Uint8Array();
-let inputOffset = 0;
 
 function toText(value) {
 	if (value instanceof Error) {
@@ -63,43 +61,34 @@ for (const level of ['log', 'info', 'debug', 'warn', 'error']) {
 async function run(payload) {
 	try {
 		currentCapture = !!payload.capture;
+		const compilerModule = await import(new URL('teavm-javac.js', payload.runtimeUri).toString());
 		const runtimeModule = await import(payload.runtimeUri);
-		const runtimeOptions = await createRuntimeOptions(payload);
-		const runtime = await runtimeModule.load(new Uint8Array(payload.wasmBytes), runtimeOptions);
-		const main = runtime.exports?.main;
-		if (typeof main !== 'function') {
-			throw new Error('Compiled Java program did not export main().');
+		if (typeof compilerModule.createJavaProgram !== 'function') {
+			throw new Error('teavm-javac.js did not export createJavaProgram().');
 		}
-		await Promise.resolve(main([]));
-		send({ type: 'finished' });
+
+		let finished = false;
+		const finish = () => {
+			if (!finished) {
+				finished = true;
+				send({ type: 'finished' });
+			}
+		};
+		const program = await compilerModule.createJavaProgram(new Uint8Array(payload.wasmBytes), {
+			runtimeModule,
+			stdio: {
+				stdin: payload.input || '',
+				stdout: text => send({ type: 'stdout', text }),
+				stderr: text => send({ type: 'stderr', text })
+			}
+		});
+		await program.execute({
+			args: [],
+			timeoutMs: 10000,
+			onFinish: finish
+		});
+		finish();
 	} catch (error) {
 		send({ type: 'error', text: toText(error) });
 	}
-}
-
-async function createRuntimeOptions(payload) {
-	try {
-		const helperModule = await import(new URL('teavm-javac.js', payload.runtimeUri).toString());
-		if (typeof helperModule.createJavaRuntimeOptions === 'function') {
-			return helperModule.createJavaRuntimeOptions({
-				stdin: payload.input || '',
-				stdout: text => send({ type: 'log', level: 'log', text }),
-				stderr: text => send({ type: 'log', level: 'error', text })
-			});
-		}
-	} catch {
-		// Fall through to the lower-level import hook for older package builds.
-	}
-	inputBytes = new TextEncoder().encode(payload.input || '');
-	inputOffset = 0;
-	return {
-		installImports(imports) {
-			imports.teavmConsole = {
-				...imports.teavmConsole,
-				readStdin() {
-					return inputOffset < inputBytes.length ? inputBytes[inputOffset++] : -1;
-				}
-			};
-		}
-	};
 }

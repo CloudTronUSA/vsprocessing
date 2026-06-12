@@ -18,60 +18,76 @@
 			min-height: 100vh;
 			display: flex;
 			flex-direction: column;
-			gap: 6px;
+			gap: 10px;
 			padding: 8px 12px 10px;
 		}
-		.references {
+		.main, .bottom {
 			display: flex;
 			flex-direction: column;
-			gap: 6px;
-			margin-top: auto;
-			padding-top: 8px;
+			gap: 8px;
 		}
-			button {
-				box-sizing: border-box;
-				width: 100%;
+		.bottom {
+			margin-top: auto;
+			padding-top: 10px;
+		}
+		label {
+			display: flex;
+			flex-direction: column;
+			gap: 4px;
+			color: var(--vscode-descriptionForeground);
+			font-size: 11px;
+			line-height: 1.35;
+		}
+		select, button {
+			box-sizing: border-box;
+			width: 100%;
+			font: inherit;
+		}
+		select {
+			min-height: 26px;
+			border: 1px solid var(--vscode-dropdown-border);
+			border-radius: 2px;
+			padding: 3px 8px;
+			background: var(--vscode-dropdown-background);
+			color: var(--vscode-dropdown-foreground);
+		}
+		button {
+			display: flex;
+			justify-content: center;
+			align-items: center;
 			min-height: 28px;
 			border: 1px solid var(--vscode-button-border, transparent);
-			border-radius: 2px;
-			padding: 4px 10px;
-			background: var(--vscode-button-background);
+			border-radius: 4px;
+			padding: 4px 8px;
+			background-color: var(--vscode-button-background);
 			color: var(--vscode-button-foreground);
-			font: inherit;
 			text-align: center;
-				cursor: pointer;
-			}
-			select {
-				box-sizing: border-box;
-				width: 100%;
-				min-height: 26px;
-				border: 1px solid var(--vscode-dropdown-border);
-				border-radius: 2px;
-				padding: 3px 8px;
-				background: var(--vscode-dropdown-background);
-				color: var(--vscode-dropdown-foreground);
-				font: inherit;
-			}
-		button:hover:not(:disabled) {
-			background: var(--vscode-button-hoverBackground);
+			line-height: 16px;
+			font-size: 12px;
+			cursor: pointer;
+			overflow-wrap: normal;
 		}
-		button:focus-visible {
+		button:hover:not(:disabled) {
+			background-color: var(--vscode-button-hoverBackground);
+			text-decoration: none;
+		}
+		button:focus-visible, select:focus-visible {
 			outline: 1px solid var(--vscode-focusBorder);
 			outline-offset: 2px;
 		}
 		button.secondary {
-			background: var(--vscode-button-secondaryBackground);
+			border-color: var(--vscode-button-secondaryBorder, var(--vscode-button-border, transparent));
+			background-color: var(--vscode-button-secondaryBackground);
 			color: var(--vscode-button-secondaryForeground);
 		}
 		button.secondary:hover:not(:disabled) {
-			background: var(--vscode-button-secondaryHoverBackground);
+			background-color: var(--vscode-button-secondaryHoverBackground);
 		}
 		button:disabled {
-			opacity: 0.45;
+			opacity: 0.4;
 			cursor: default;
 		}
 		.status, .warning {
-			margin-top: 4px;
 			color: var(--vscode-descriptionForeground);
 			font-size: 11px;
 			line-height: 1.35;
@@ -81,32 +97,28 @@
 		}
 	</style>
 </head>
-	<body>
-		<div class="controls">
-			<select id="mode" aria-label="Mode">
-				<option value="processing">Processing</option>
-				<option value="java">Java</option>
-			</select>
-			<select id="processingOutput" aria-label="Processing output">
-				<option value="auto">Auto</option>
-				<option value="wasm-gc">Wasm-GC</option>
-				<option value="js">JavaScript</option>
-			</select>
-			<div id="normalControls">
-				<button id="compile" type="button">Compile</button>
-				<button id="run" type="button">Run</button>
-				<button id="exportWebsite" type="button">Export Website</button>
-			</div>
-			<div id="assignmentControls">
-				<button id="runAssignmentTests" type="button">Run Assignment Tests</button>
-				<button id="openTestReport" class="secondary" type="button">Open Test Case Report</button>
-				<button id="editAssignment" class="secondary" type="button">Edit Autograded Assignment</button>
-			</div>
-			<button id="createAssignment" class="secondary" type="button">Create Autograded Assignment</button>
+<body>
+	<div class="controls">
+		<div class="main">
+			<label>
+				Language
+				<select id="mode" aria-label="Language">
+					<option value="processing">Processing</option>
+					<option value="java">Java</option>
+				</select>
+			</label>
+			<button id="compile" type="button">Compile</button>
+			<button id="run" type="button">Run</button>
 			<button id="stop" class="secondary" type="button">Stop</button>
-		<div id="status" class="status"></div>
-		<div id="warning" class="warning"></div>
-		<div class="references">
+			<div id="status" class="status"></div>
+			<div id="warning" class="warning"></div>
+		</div>
+		<div class="bottom">
+			<button id="exportWebsite" class="secondary" type="button">Export Website</button>
+			<button id="createAssignment" class="secondary" type="button">Create Assignment</button>
+			<button id="runAssignmentTests" class="secondary" type="button">Run Assignment Tests</button>
+			<button id="openTestReport" class="secondary" type="button">Open Test Case Report</button>
+			<button id="editAssignment" class="secondary" type="button">Edit Autograded Assignment</button>
 			<button id="processingReference" class="secondary" type="button">Open Processing Reference</button>
 			<button id="apcsaReference" class="secondary" type="button">Open APCSA Reference</button>
 		</div>
@@ -114,81 +126,81 @@
 	<script nonce="{{nonce}}">
 		const vscode = acquireVsCodeApi();
 		const state = JSON.parse("{{initialState}}");
-			const buttons = {
-				compile: document.getElementById('compile'),
-				run: document.getElementById('run'),
-				runAssignmentTests: document.getElementById('runAssignmentTests'),
-				openTestReport: document.getElementById('openTestReport'),
-				createAssignment: document.getElementById('createAssignment'),
-				editAssignment: document.getElementById('editAssignment'),
-				exportWebsite: document.getElementById('exportWebsite'),
-				stop: document.getElementById('stop'),
-				processingReference: document.getElementById('processingReference'),
-				apcsaReference: document.getElementById('apcsaReference')
-			};
-			const normalControls = document.getElementById('normalControls');
-			const assignmentControls = document.getElementById('assignmentControls');
-			const mode = document.getElementById('mode');
-			const processingOutput = document.getElementById('processingOutput');
-			const status = document.getElementById('status');
-			const warning = document.getElementById('warning');
-			function setDisabled(element, disabled) {
-				if (element) {
-					element.disabled = disabled;
-				}
+		const buttons = {
+			compile: document.getElementById('compile'),
+			run: document.getElementById('run'),
+			stop: document.getElementById('stop'),
+			exportWebsite: document.getElementById('exportWebsite'),
+			createAssignment: document.getElementById('createAssignment'),
+			runAssignmentTests: document.getElementById('runAssignmentTests'),
+			openTestReport: document.getElementById('openTestReport'),
+			editAssignment: document.getElementById('editAssignment'),
+			processingReference: document.getElementById('processingReference'),
+			apcsaReference: document.getElementById('apcsaReference')
+		};
+		const mode = document.getElementById('mode');
+		const status = document.getElementById('status');
+		const warning = document.getElementById('warning');
+
+		function setDisabled(element, disabled) {
+			if (element) {
+				element.disabled = disabled;
 			}
-			function setText(element, text) {
-				if (element) {
-					element.textContent = text;
-				}
-			}
-			function onClick(element, callback) {
-				if (element) {
-					element.addEventListener('click', callback);
-				}
-			}
-			function applyState(next) {
-				Object.assign(state, next);
-				if (mode) {
-					mode.value = state.mode || 'processing';
-					mode.disabled = state.assignment_mode || state.isCompiling || state.isRunning;
-				}
-				if (processingOutput) {
-					processingOutput.value = state.processingOutput || 'auto';
-					processingOutput.disabled = state.assignment_mode || state.mode !== 'processing' || state.isCompiling || state.isRunning;
-				}
-				if (normalControls) normalControls.hidden = !!state.assignment_mode;
-				if (assignmentControls) assignmentControls.hidden = !state.assignment_mode;
-				setDisabled(buttons.compile, !state.hasSources || state.isCompiling || state.isRunning);
-				setDisabled(buttons.run, !state.hasSources || !state.hasCompiled || state.isCompiling || state.isRunning);
-				setDisabled(buttons.runAssignmentTests, !state.assignment_mode || state.isCompiling || state.isRunning);
-				setDisabled(buttons.openTestReport, !state.assignment_mode);
-				setDisabled(buttons.createAssignment, state.assignment_mode || state.isCompiling || state.isRunning);
-				setDisabled(buttons.editAssignment, !state.assignment_mode || state.isCompiling || state.isRunning);
-				setDisabled(buttons.exportWebsite, state.mode !== 'processing' || !state.hasSources || state.isCompiling || state.isRunning);
-				setDisabled(buttons.stop, !state.isRunning);
-				setText(status, state.status || '');
-				setText(warning, state.warning || '');
-				if (warning) {
-					warning.hidden = !state.warning;
-				}
 		}
-			onClick(buttons.compile, () => vscode.postMessage({ type: 'compile' }));
-			onClick(buttons.run, () => vscode.postMessage({ type: 'run' }));
-			onClick(buttons.runAssignmentTests, () => vscode.postMessage({ type: 'runAssignmentTests' }));
-			onClick(buttons.openTestReport, () => vscode.postMessage({ type: 'openTestReport' }));
-			onClick(buttons.createAssignment, () => vscode.postMessage({ type: 'createAssignment' }));
-			onClick(buttons.editAssignment, () => vscode.postMessage({ type: 'editAssignment' }));
-			onClick(buttons.exportWebsite, () => vscode.postMessage({ type: 'exportWebsite' }));
-			onClick(buttons.stop, () => vscode.postMessage({ type: 'stop' }));
-			onClick(buttons.processingReference, () => vscode.postMessage({ type: 'openReference' }));
-			onClick(buttons.apcsaReference, () => vscode.postMessage({ type: 'openApcsaReference' }));
+
+		function setHidden(element, hidden) {
+			if (element) {
+				element.hidden = hidden;
+			}
+		}
+
+		function setText(element, text) {
+			if (element) {
+				element.textContent = text;
+			}
+		}
+
+		function onClick(element, callback) {
+			if (element) {
+				element.addEventListener('click', callback);
+			}
+		}
+
+		function applyState(next) {
+			Object.assign(state, next);
 			if (mode) {
-				mode.addEventListener('change', () => vscode.postMessage({ type: 'mode', mode: mode.value }));
+				mode.value = state.mode || 'processing';
+				mode.disabled = state.assignment_mode || state.isCompiling || state.isRunning;
 			}
-			if (processingOutput) {
-				processingOutput.addEventListener('change', () => vscode.postMessage({ type: 'processingOutput', output: processingOutput.value }));
-			}
+			setDisabled(buttons.compile, !state.hasSources || state.isCompiling || state.isRunning);
+			setDisabled(buttons.run, !state.hasSources || !state.hasCompiled || state.isCompiling || state.isRunning);
+			setDisabled(buttons.stop, !state.isRunning);
+			setDisabled(buttons.exportWebsite, state.mode !== 'processing' || !state.hasSources || state.isCompiling || state.isRunning);
+			setDisabled(buttons.createAssignment, state.assignment_mode || state.isCompiling || state.isRunning);
+			setDisabled(buttons.runAssignmentTests, !state.assignment_mode || state.isCompiling || state.isRunning);
+			setDisabled(buttons.openTestReport, !state.assignment_mode);
+			setDisabled(buttons.editAssignment, !state.assignment_mode || state.isCompiling || state.isRunning);
+			setHidden(buttons.runAssignmentTests, !state.assignment_mode);
+			setHidden(buttons.openTestReport, !state.assignment_mode);
+			setHidden(buttons.editAssignment, !state.assignment_mode);
+			setText(status, state.status || '');
+			setText(warning, state.warning || '');
+			setHidden(warning, !state.warning);
+		}
+
+		onClick(buttons.compile, () => vscode.postMessage({ type: 'compile' }));
+		onClick(buttons.run, () => vscode.postMessage({ type: 'run' }));
+		onClick(buttons.stop, () => vscode.postMessage({ type: 'stop' }));
+		onClick(buttons.exportWebsite, () => vscode.postMessage({ type: 'exportWebsite' }));
+		onClick(buttons.createAssignment, () => vscode.postMessage({ type: 'createAssignment' }));
+		onClick(buttons.runAssignmentTests, () => vscode.postMessage({ type: 'runAssignmentTests' }));
+		onClick(buttons.openTestReport, () => vscode.postMessage({ type: 'openTestReport' }));
+		onClick(buttons.editAssignment, () => vscode.postMessage({ type: 'editAssignment' }));
+		onClick(buttons.processingReference, () => vscode.postMessage({ type: 'openReference' }));
+		onClick(buttons.apcsaReference, () => vscode.postMessage({ type: 'openApcsaReference' }));
+		if (mode) {
+			mode.addEventListener('change', () => vscode.postMessage({ type: 'mode', mode: mode.value }));
+		}
 		window.addEventListener('message', event => {
 			if (event.data?.type === 'state') {
 				applyState(event.data.state);

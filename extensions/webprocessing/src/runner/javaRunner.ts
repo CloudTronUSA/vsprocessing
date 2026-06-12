@@ -15,6 +15,7 @@ export class JavaRunner implements vscode.Disposable {
 		private readonly extensionUri: vscode.Uri,
 		private readonly runtimeUri: () => string,
 		private readonly log: (message?: string) => void,
+		private readonly appendOutput: (message?: string) => void,
 		private readonly showOutput: () => void,
 		private readonly setRunning: (running: boolean) => void,
 		private readonly refreshState: () => Promise<void>
@@ -94,12 +95,14 @@ export class JavaRunner implements vscode.Disposable {
 			worker.onmessage = event => {
 				const message = event.data as JavaRuntimeMessage;
 				switch (message.type) {
+					case 'stdout':
+						stdout += message.text ?? '';
+						break;
+					case 'stderr':
+						stderr += message.text ?? '';
+						break;
 					case 'log':
-						if (message.level === 'error' || message.level === 'warn') {
-							stderr += `${message.text ?? ''}\n`;
-						} else {
-							stdout += `${message.text ?? ''}\n`;
-						}
+						stderr += `${message.text ?? ''}\n`;
 						break;
 					case 'finished':
 						finish({ stdout, stderr });
@@ -138,6 +141,11 @@ export class JavaRunner implements vscode.Disposable {
 			return;
 		}
 		switch (message.type) {
+			case 'stdout':
+			case 'stderr':
+				this.showOutput();
+				this.appendOutput(message.text ?? '');
+				break;
 			case 'log':
 				this.showOutput();
 				this.log(`${message.text ?? ''}`);

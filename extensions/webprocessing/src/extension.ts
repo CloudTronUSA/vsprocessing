@@ -56,11 +56,12 @@ class Extension implements vscode.Disposable, ExtensionController {
 	constructor(private readonly context: vscode.ExtensionContext) {
 		this.compiler = new ProcessingCompiler(context.extensionUri, message => this.log(message));
 		this.controlsProvider = new ExtensionControlsProvider(context.extensionUri, this);
-		this.websiteExporter = new WebsiteExporter(context.extensionUri, this.compiler, () => this.getProcessingOutputTarget(), extensionVersion(context), message => this.log(message));
+		this.websiteExporter = new WebsiteExporter(context.extensionUri, this.compiler, extensionVersion(context), message => this.log(message));
 		this.javaRunner = new JavaRunner(
 			context.extensionUri,
 			() => this.compiler.assetImportUri('compiler.wasm-runtime.js'),
 			message => this.log(message),
+			message => this.appendOutput(message),
 			() => this.showOutput(),
 			running => this.setRunning(running),
 			() => this.refreshState()
@@ -524,8 +525,7 @@ class Extension implements vscode.Disposable, ExtensionController {
 	}
 
 	private getProcessingOutputTarget(): ProcessingOutputTarget {
-		const configured = vscode.workspace.getConfiguration('webprocessing').get<string>('processingOutput', 'auto');
-		return configured === 'wasm-gc' || configured === 'js' ? configured : 'auto';
+		return 'auto';
 	}
 
 	private resolveBuildArtifactOutput(wasmStat: vscode.FileStat | undefined, jsStat: vscode.FileStat | undefined): BuildOutputKind | undefined {
@@ -598,6 +598,11 @@ class Extension implements vscode.Disposable, ExtensionController {
 
 	private handleRuntimeMessage(message: RuntimeMessage): void {
 		switch (message.type) {
+			case 'stdout':
+			case 'stderr':
+				this.showOutput();
+				this.appendOutput(message.text);
+				break;
 			case 'log-raw':
 				this.showOutput();
 				this.log(`${message.text}`);
@@ -643,6 +648,10 @@ class Extension implements vscode.Disposable, ExtensionController {
 
 	private log(message = ''): void {
 		this.output.appendLine(message);
+	}
+
+	private appendOutput(message = ''): void {
+		this.output.append(message);
 	}
 
 	private async openControlView(): Promise<void> {

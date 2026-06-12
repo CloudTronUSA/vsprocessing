@@ -179,7 +179,7 @@ export function identifyEntrypoint<T extends { readonly path?: string }>(sources
 		];
 
 	for (const candidate of candidates) {
-		const index = sources.findIndex(source => source.path?.toLowerCase() === candidate);
+		const index = sources.findIndex(source => source.path?.toLowerCase().split('/').pop() === candidate);
 		if (index >= 0) {
 			return sources[index];
 		}
@@ -244,7 +244,7 @@ export function formatDiagnostic(diagnostic: ProcessingDiagnostic): string {
 	const line = diagnostic.lineNumber ? `:${diagnostic.lineNumber}` : '';
 	const column = diagnostic.columnNumber ? `:${diagnostic.columnNumber}` : '';
 	const message = diagnostic.message ?? String(diagnostic);
-	return `[processing.compiler] ${file}${line}${column}: ${type} ${severity}: ${message}`.trim();
+	return `[compiler] ${file}${line}${column}: ${type} ${severity}: ${message}`.trim();
 }
 
 export function formatDuration(ms: number): string {

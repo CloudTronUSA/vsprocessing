@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { ExtensionControlsViewState, ExtensionController, ProcessingOutputTarget } from '../core/types';
+import type { ExtensionControlsViewState, ExtensionController } from '../core/types';
 import { createNonce, escapeScriptJson, readTemplate, renderTemplate, type SourceKind } from '../utils';
 
 type ControlsMessage =
@@ -13,8 +13,7 @@ type ControlsMessage =
 	| { readonly type: 'stop' }
 	| { readonly type: 'openReference' }
 	| { readonly type: 'openApcsaReference' }
-	| { readonly type: 'mode'; readonly mode: SourceKind }
-	| { readonly type: 'processingOutput'; readonly output: ProcessingOutputTarget };
+	| { readonly type: 'mode'; readonly mode: SourceKind };
 
 export class ExtensionControlsProvider implements vscode.WebviewViewProvider {
 	private view: vscode.WebviewView | undefined;
@@ -69,9 +68,6 @@ export class ExtensionControlsProvider implements vscode.WebviewViewProvider {
 				break;
 			case 'mode':
 				this.controller.setMode(message.mode);
-				break;
-			case 'processingOutput':
-				void this.controller.setProcessingOutput(message.output);
 				break;
 		}
 	}

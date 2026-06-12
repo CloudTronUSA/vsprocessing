@@ -1,11 +1,28 @@
 import * as vscode from 'vscode';
-import type { WebJdtLsApi } from 'eclipse-jdt-ls-web';
 import { collectSources, identifyEntrypoint, isInWorkspaceFolder, isJavaUri, isProcessingUri, type WorkspaceSource } from '../utils';
 
 declare function setTimeout(handler: (...args: unknown[]) => void, timeout?: number): unknown;
 declare function clearTimeout(handle: unknown): void;
 
 const importModule = new Function('specifier', 'return import(specifier);') as <T>(specifier: string) => Promise<T>;
+
+interface JdtWasmExports {
+	readonly lint: (uri: string, source: string) => string;
+	readonly lintProcessing: (entrypointUri: string, entrypointSource: string, additionalPdesJson: string) => string;
+	readonly handle: (payload: string) => string;
+}
+
+interface JdtWasmInstance {
+	readonly exports: JdtWasmExports;
+}
+
+interface JdtWasmGlobal {
+	readonly TeaVM?: {
+		readonly wasmGC?: {
+			readonly load: (wasm: Uint8Array) => Promise<JdtWasmInstance>;
+		};
+	};
+}
 
 interface LspPosition {
 	readonly line: number;
@@ -35,10 +52,76 @@ interface PublishDiagnosticsMessage {
 	};
 }
 
+interface LspTextEdit {
+	readonly range: {
+		readonly start: LspPosition;
+		readonly end: LspPosition;
+	};
+	readonly newText: string;
+}
+
+interface LspMarkupContent {
+	readonly kind?: string;
+	readonly value?: string;
+}
+
+interface LspCompletionItem {
+	readonly label: string;
+	readonly kind?: number;
+	readonly detail?: string;
+	readonly documentation?: string | LspMarkupContent;
+	readonly sortText?: string;
+	readonly filterText?: string;
+	readonly insertText?: string;
+	readonly insertTextFormat?: number;
+	readonly textEdit?: LspTextEdit;
+	readonly additionalTextEdits?: readonly LspTextEdit[];
+	readonly commitCharacters?: readonly string[];
+	readonly preselect?: boolean;
+}
+
+interface LspCompletionList {
+	readonly isIncomplete?: boolean;
+	readonly items?: readonly LspCompletionItem[];
+}
+
+interface LspResponse<T> {
+	readonly result?: T | null;
+	readonly error?: {
+		readonly code?: number;
+		readonly message?: string;
+	};
+}
+
+type LspHoverContent = string | LspMarkupContent;
+
+interface LspHover {
+	readonly contents?: LspHoverContent | readonly LspHoverContent[];
+	readonly range?: LspTextEdit['range'];
+}
+
+interface LspParameterInformation {
+	readonly label: string | readonly [number, number];
+	readonly documentation?: string | LspMarkupContent;
+}
+
+interface LspSignatureInformation {
+	readonly label: string;
+	readonly documentation?: string | LspMarkupContent;
+	readonly parameters?: readonly LspParameterInformation[];
+	readonly activeParameter?: number;
+}
+
+interface LspSignatureHelp {
+	readonly signatures?: readonly LspSignatureInformation[];
+	readonly activeSignature?: number;
+	readonly activeParameter?: number;
+}
+
 export class ProcessingLanguageService implements vscode.Disposable {
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly diagnostics = vscode.languages.createDiagnosticCollection('webprocessing');
-	private jdt: Promise<WebJdtLsApi> | undefined;
+	private jdtWasm: Promise<JdtWasmExports> | undefined;
 	private lintTimer: unknown;
 	private linting = false;
 	private pendingJava = false;
@@ -57,6 +140,21 @@ export class ProcessingLanguageService implements vscode.Disposable {
 		this.disposables.push(vscode.workspace.onDidCreateFiles(() => this.scheduleAll()));
 		this.disposables.push(vscode.workspace.onDidDeleteFiles(() => this.scheduleAll()));
 		this.disposables.push(vscode.workspace.onDidRenameFiles(() => this.scheduleAll()));
+		this.disposables.push(vscode.languages.registerCompletionItemProvider(
+			{ language: 'java', scheme: '*' },
+			{ provideCompletionItems: (document, position) => this.provideCompletionItems(document, position) },
+			'.',
+			'@'
+		));
+		this.disposables.push(vscode.languages.registerHoverProvider(
+			{ language: 'java', scheme: '*' },
+			{ provideHover: (document, position) => this.provideHover(document, position) }
+		));
+		this.disposables.push(vscode.languages.registerSignatureHelpProvider(
+			{ language: 'java', scheme: '*' },
+			{ provideSignatureHelp: (document, position, _token, context) => this.provideSignatureHelp(document, position, context) },
+			{ triggerCharacters: ['(', ','], retriggerCharacters: [','] }
+		));
 		this.scheduleAll();
 	}
 
@@ -194,6 +292,35 @@ export class ProcessingLanguageService implements vscode.Disposable {
 		}
 	}
 
+	private async provideCompletionItems(document: vscode.TextDocument, position: vscode.Position): Promise<vscode.CompletionList | undefined> {
+		if (!this.supportsDocument(document)) {
+			return undefined;
+		}
+		const result = await this.requestJdt<LspCompletionList | readonly LspCompletionItem[]>(document, 'textDocument/completion', position);
+		return result ? this.toCompletionList(result) : undefined;
+	}
+
+	private async provideHover(document: vscode.TextDocument, position: vscode.Position): Promise<vscode.Hover | undefined> {
+		if (!this.supportsDocument(document)) {
+			return undefined;
+		}
+		const result = await this.requestJdt<LspHover>(document, 'textDocument/hover', position);
+		return result ? this.toHover(result) : undefined;
+	}
+
+	private async provideSignatureHelp(document: vscode.TextDocument, position: vscode.Position, context: vscode.SignatureHelpContext): Promise<vscode.SignatureHelp | undefined> {
+		if (!this.supportsDocument(document)) {
+			return undefined;
+		}
+		const result = await this.requestJdt<LspSignatureHelp>(document, 'textDocument/signatureHelp', position, {
+			context: {
+				triggerKind: context.triggerKind,
+				triggerCharacter: context.triggerCharacter
+			}
+		});
+		return result ? this.toSignatureHelp(result) : undefined;
+	}
+
 	private async lintProcessing(): Promise<void> {
 		const currentUris = new Set<string>();
 		const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
@@ -326,6 +453,41 @@ export class ProcessingLanguageService implements vscode.Disposable {
 		return vscode.workspace.getWorkspaceFolder(source.uri) ? source.uri.toString() : source.path;
 	}
 
+	private jdtDocumentUri(document: vscode.TextDocument): string {
+		return vscode.workspace.getWorkspaceFolder(document.uri) ? document.uri.toString() : document.fileName;
+	}
+
+	private supportsDocument(document: vscode.TextDocument): boolean {
+		return isJavaUri(document.uri) || isProcessingUri(document.uri);
+	}
+
+	private async requestJdt<T>(document: vscode.TextDocument, method: string, position: vscode.Position, params?: object): Promise<T | undefined> {
+		const jdt = await this.loadJdtWasm();
+		const uri = this.jdtDocumentUri(document);
+		jdt.handle(JSON.stringify({
+			jsonrpc: '2.0',
+			method: 'java/browserJdtLs/workspaceSources',
+			params: {
+				uri,
+				text: document.getText()
+			}
+		}));
+		const response = this.parseResponse<T>(jdt.handle(JSON.stringify({
+			jsonrpc: '2.0',
+			id: 1,
+			method,
+			params: {
+				textDocument: { uri },
+				position: {
+					line: position.line,
+					character: position.character
+				},
+				...params
+			}
+		})));
+		return response?.result ?? undefined;
+	}
+
 	private toDiagnostic(diagnostic: LspDiagnostic): vscode.Diagnostic {
 		const result = new vscode.Diagnostic(
 			new vscode.Range(
@@ -355,6 +517,138 @@ export class ProcessingLanguageService implements vscode.Disposable {
 		}
 	}
 
+	private toCompletionList(value: LspCompletionList | readonly LspCompletionItem[]): vscode.CompletionList {
+		const parsed = value as unknown;
+		if (Array.isArray(parsed)) {
+			return new vscode.CompletionList((parsed as LspCompletionItem[]).map(item => this.toCompletionItem(item)));
+		}
+		const list = value as LspCompletionList;
+		const items = list.items ?? [];
+		return new vscode.CompletionList(items.map(item => this.toCompletionItem(item)), !!list.isIncomplete);
+	}
+
+	private toCompletionItem(item: LspCompletionItem): vscode.CompletionItem {
+		const result = new vscode.CompletionItem(item.label, this.toCompletionKind(item.kind));
+		result.detail = item.detail;
+		result.documentation = this.toCompletionDocumentation(item.documentation);
+		result.sortText = item.sortText;
+		result.filterText = item.filterText;
+		result.commitCharacters = item.commitCharacters ? [...item.commitCharacters] : undefined;
+		result.preselect = item.preselect;
+		if (item.textEdit) {
+			result.textEdit = new vscode.TextEdit(this.toRange(item.textEdit.range), item.textEdit.newText);
+		} else if (item.insertText) {
+			result.insertText = item.insertTextFormat === 2 ? new vscode.SnippetString(item.insertText) : item.insertText;
+		}
+		if (item.additionalTextEdits) {
+			result.additionalTextEdits = item.additionalTextEdits.map(edit => new vscode.TextEdit(this.toRange(edit.range), edit.newText));
+		}
+		return result;
+	}
+
+	private toCompletionDocumentation(documentation: string | LspMarkupContent | undefined): string | vscode.MarkdownString | undefined {
+		if (!documentation || typeof documentation === 'string') {
+			return documentation;
+		}
+		if (documentation.kind === 'markdown') {
+			return new vscode.MarkdownString(documentation.value ?? '');
+		}
+		return documentation.value;
+	}
+
+	private toHover(hover: LspHover): vscode.Hover | undefined {
+		if (!hover.contents) {
+			return undefined;
+		}
+		const contents = (Array.isArray(hover.contents) ? hover.contents : [hover.contents])
+			.map(content => this.toMarkdown(content))
+			.filter(content => content.value.length > 0);
+		return contents.length ? new vscode.Hover(contents, hover.range ? this.toRange(hover.range) : undefined) : undefined;
+	}
+
+	private toSignatureHelp(signatureHelp: LspSignatureHelp): vscode.SignatureHelp | undefined {
+		const signatures = signatureHelp.signatures ?? [];
+		if (!signatures.length) {
+			return undefined;
+		}
+		const result = new vscode.SignatureHelp();
+		result.signatures = signatures.map(signature => this.toSignatureInformation(signature));
+		result.activeSignature = signatureHelp.activeSignature ?? 0;
+		result.activeParameter = signatureHelp.activeParameter ?? 0;
+		return result;
+	}
+
+	private toSignatureInformation(signature: LspSignatureInformation): vscode.SignatureInformation {
+		const result = new vscode.SignatureInformation(signature.label, this.toDocumentation(signature.documentation));
+		result.parameters = (signature.parameters ?? []).map(parameter => new vscode.ParameterInformation(
+			this.toParameterLabel(parameter.label),
+			this.toDocumentation(parameter.documentation)
+		));
+		result.activeParameter = signature.activeParameter;
+		return result;
+	}
+
+	private toParameterLabel(label: string | readonly [number, number]): string | [number, number] {
+		const value = label as unknown;
+		return Array.isArray(value) ? [value[0], value[1]] : label as string;
+	}
+
+	private toDocumentation(documentation: string | LspMarkupContent | undefined): string | vscode.MarkdownString | undefined {
+		if (!documentation || typeof documentation === 'string') {
+			return documentation;
+		}
+		return this.toMarkdown(documentation);
+	}
+
+	private toMarkdown(content: LspHoverContent): vscode.MarkdownString {
+		if (typeof content === 'string') {
+			return new vscode.MarkdownString(content);
+		}
+		const markdown = new vscode.MarkdownString(content.value ?? '');
+		markdown.supportHtml = content.kind !== 'plaintext';
+		return markdown;
+	}
+
+	private toCompletionKind(kind: number | undefined): vscode.CompletionItemKind | undefined {
+		switch (kind) {
+			case 1: return vscode.CompletionItemKind.Text;
+			case 2: return vscode.CompletionItemKind.Method;
+			case 3: return vscode.CompletionItemKind.Function;
+			case 4: return vscode.CompletionItemKind.Constructor;
+			case 5: return vscode.CompletionItemKind.Field;
+			case 6: return vscode.CompletionItemKind.Variable;
+			case 7: return vscode.CompletionItemKind.Class;
+			case 8: return vscode.CompletionItemKind.Interface;
+			case 9: return vscode.CompletionItemKind.Module;
+			case 10: return vscode.CompletionItemKind.Property;
+			case 11: return vscode.CompletionItemKind.Unit;
+			case 12: return vscode.CompletionItemKind.Value;
+			case 13: return vscode.CompletionItemKind.Enum;
+			case 14: return vscode.CompletionItemKind.Keyword;
+			case 15: return vscode.CompletionItemKind.Snippet;
+			case 16: return vscode.CompletionItemKind.Color;
+			case 17: return vscode.CompletionItemKind.File;
+			case 18: return vscode.CompletionItemKind.Reference;
+			case 19: return vscode.CompletionItemKind.Folder;
+			case 20: return vscode.CompletionItemKind.EnumMember;
+			case 21: return vscode.CompletionItemKind.Constant;
+			case 22: return vscode.CompletionItemKind.Struct;
+			case 23: return vscode.CompletionItemKind.Event;
+			case 24: return vscode.CompletionItemKind.Operator;
+			case 25: return vscode.CompletionItemKind.TypeParameter;
+			default: return undefined;
+		}
+	}
+
+	private toRange(range: LspTextEdit['range']): vscode.Range {
+		return new vscode.Range(
+			range.start.line,
+			range.start.character,
+			range.end.line,
+			range.end.character
+		);
+	}
+
 	private parseDiagnostics(payload: string): readonly MappedLspDiagnostic[] {
 		if (!payload) {
 			return [];
@@ -371,21 +665,36 @@ export class ProcessingLanguageService implements vscode.Disposable {
 		return Array.isArray(parsed) ? parsed : [parsed];
 	}
 
-	private async loadJdtWasm(): Promise<WebJdtLsApi> {
-		if (!this.jdt) {
-			this.jdt = this.doLoadJdtWasm();
+	private parseResponse<T>(payload: string): LspResponse<T> | undefined {
+		if (!payload) {
+			return undefined;
 		}
-		return this.jdt;
+		const response = JSON.parse(payload) as LspResponse<T>;
+		if (response.error) {
+			throw new Error(response.error.message ?? `Language server request failed: ${response.error.code ?? 'unknown error'}`);
+		}
+		return response;
 	}
 
-	private async doLoadJdtWasm(): Promise<WebJdtLsApi> {
-		const module = await importModule<typeof import('eclipse-jdt-ls-web')>(this.jdtAssetImportUri('web-jdt-ls.js'));
-		return module.load({ baseUrl: this.jdtAssetUri().toString() });
+	private async loadJdtWasm(): Promise<JdtWasmExports> {
+		if (!this.jdtWasm) {
+			this.jdtWasm = this.doLoadJdtWasm();
+		}
+		return this.jdtWasm;
 	}
 
-	private jdtAssetUri(name = ''): vscode.Uri {
-		const root = vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'browser', 'vendor', 'eclipse-jdt-ls-web');
-		return name ? vscode.Uri.joinPath(root, name) : root;
+	private async doLoadJdtWasm(): Promise<JdtWasmExports> {
+		await importModule(this.jdtAssetImportUri('classes.wasm-runtime.js'));
+		const teavm = (globalThis as unknown as JdtWasmGlobal).TeaVM?.wasmGC;
+		if (!teavm) {
+			throw new Error('TeaVM Wasm-GC runtime is unavailable.');
+		}
+		const instance = await teavm.load(await vscode.workspace.fs.readFile(this.jdtAssetUri('classes.wasm')));
+		return instance.exports;
+	}
+
+	private jdtAssetUri(name: string): vscode.Uri {
+		return vscode.Uri.joinPath(this.context.extensionUri, 'lib', 'eclipse.jdt.ls-wasm', name);
 	}
 
 	private jdtAssetImportUri(name: string): string {
