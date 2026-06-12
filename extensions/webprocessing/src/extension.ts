@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { ProcessingLinter } from './linter';
+import { ProcessingLinter } from './java-lsp/processingLsp';
 import {
 	buildArtifactFileName, buildArtifactFileUri, collectSources, countLines,
 	createNonce, escapeScriptJson, formatDiagnostic, formatDuration,

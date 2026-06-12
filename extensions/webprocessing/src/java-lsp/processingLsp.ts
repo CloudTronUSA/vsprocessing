@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { collectSources, identifyEntrypoint, isInWorkspaceFolder, isJavaUri, isProcessingUri, type WorkspaceSource } from './utils';
+import { collectSources, identifyEntrypoint, isInWorkspaceFolder, isJavaUri, isProcessingUri, type WorkspaceSource } from '../utils';
 
 declare function setTimeout(handler: (...args: unknown[]) => void, timeout?: number): unknown;
 declare function clearTimeout(handle: unknown): void;
