@@ -1,64 +1,70 @@
 import * as vscode from 'vscode';
 
-export interface AssignmentProof {
-	readonly algorithm: 'PBKDF2-HMAC-SHA-256';
-	readonly iterations: number;
-	readonly salt: string;
-	readonly digest: string;
-}
+export type AssignmentCheck = ValidatorCheck | CompileCheck;
 
-export interface AssignmentAnswerKey {
-	readonly algorithm: 'AES-256-GCM';
-	readonly kdf: 'PBKDF2-HMAC-SHA-256';
-	readonly iterations: number;
-	readonly salt: string;
-	readonly nonce: string;
-	readonly ciphertext: string;
-}
-
-export interface AssignmentTest {
+export interface BaseCheck {
 	readonly id: string;
-	readonly visibility: 'visible' | 'hidden';
-	readonly input: string;
-	readonly expected_output?: string;
-	readonly show_input?: boolean;
-	readonly proof?: AssignmentProof;
+	readonly displayName?: string;
+	readonly description?: string;
+	readonly hidden?: boolean;
+	readonly timeoutMs?: number;
 }
 
-export interface AssignmentConfig {
-	readonly student_code: string;
-	readonly entrypoint: string;
-	readonly instructions: string;
-	readonly tests: readonly AssignmentTest[];
-	readonly answer_key?: AssignmentAnswerKey;
+export interface ValidatorCheck extends BaseCheck {
+	readonly type: 'validator';
+	readonly mainClass: string;
+	readonly files: Record<string, string>;
+	readonly args?: readonly string[];
+	readonly classpath?: readonly string[];
 }
 
-export interface Assignment {
-	readonly workspaceFolder: vscode.WorkspaceFolder;
+export interface CompileCheck extends BaseCheck {
+	readonly type: 'compiles';
+	readonly sourceGlobs?: readonly string[];
+	readonly args?: readonly string[];
+}
+
+export interface CsptAssignment {
 	readonly uri: vscode.Uri;
-	readonly config: AssignmentConfig;
-}
-
-export interface AssignmentCaseResult {
 	readonly id: string;
-	readonly visibility: 'visible' | 'hidden';
-	readonly input?: string;
-	readonly expected_output?: string;
-	readonly actual_output: string;
-	readonly passed: boolean;
-	readonly error?: string;
-	readonly diff_available: boolean;
+	readonly displayName: string;
+	readonly description: string;
+	readonly checks: readonly AssignmentCheck[];
 }
 
-export interface AssignmentReportState {
-	readonly assignment_mode: boolean;
-	readonly title: string;
+export interface CsptAssignmentData {
+	readonly id: string;
+	readonly displayName: string;
+	readonly bundleUri: string;
+	readonly startedAt: string;
+	readonly results?: readonly CsptCheckResult[];
+	readonly evaluatedAt?: string;
+}
+
+export interface CsptCheckResult {
+	readonly id: string;
+	readonly type: CompileCheck['type'] | ValidatorCheck['type'];
+	readonly displayName: string;
+	readonly description?: string;
+	readonly hidden: boolean;
+	readonly passed: boolean;
+	readonly reason?: string;
+}
+
+export interface AssignmentViewState {
+	readonly id: string;
+	readonly displayName: string;
+	readonly description: string;
+	readonly started: boolean;
 	readonly running: boolean;
-	readonly unlocked: boolean;
-	readonly results: readonly AssignmentCaseResult[];
+	readonly results: readonly AssignmentViewCheck[];
 	readonly message: string;
 }
 
-export interface AssignmentAnswerKeyPayload {
-	readonly tests?: Record<string, { readonly expected_output?: string }>;
+export interface AssignmentViewCheck {
+	readonly id: string;
+	readonly displayName: string;
+	readonly description?: string;
+	readonly passed?: boolean;
+	readonly reason?: string;
 }

@@ -1,5 +1,8 @@
 import * as vscode from 'vscode';
+import { assignmentPath, loadCsptUnpacker, readAssignmentData, writeAssignmentData } from './assignment/assignmentLoader';
+import type { CompileCheck, CsptAssignment, CsptCheckResult, ValidatorCheck } from './assignment/types';
 import { ProcessingLinter } from './java-lsp/processingLsp';
+import { AssignmentViewProvider } from './views/assignmentView';
 import {
 	buildArtifactFileName, buildArtifactFileUri, collectSources, countLines,
 	createNonce, escapeScriptJson, formatDiagnostic, formatDuration,
@@ -101,11 +104,44 @@ async function writeRuntimeFile(root: vscode.Uri | undefined, path: string, cont
 	await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(root, ...normalized.split('/')), content);
 }
 
+function parentUri(uri: vscode.Uri): vscode.Uri {
+	const index = uri.path.lastIndexOf('/');
+	if (index <= 0) {
+		return uri;
+	}
+	return uri.with({ path: uri.path.slice(0, index) });
+}
+
+function cleanErrorMessage(error: unknown): string {
+	if (error instanceof Error) {
+		return error.message || error.name;
+	}
+	return String(error);
+}
+
+function cleanJavaErrorMessage(error: unknown): string {
+	const message = cleanErrorMessage(error);
+	return message === '(could not fetch message)'
+		? 'Java exception was thrown, but Throwable.getMessage() returned null.'
+		: message;
+}
+
+function hasWasmExport(wasmBytes: Uint8Array, name: string): boolean {
+	try {
+		const bytes = wasmBytes.slice();
+		const module = new WebAssembly.Module(bytes);
+		return WebAssembly.Module.exports(module).some(entry => entry.name === name);
+	} catch {
+		return false;
+	}
+}
+
 class Extension implements vscode.Disposable {
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly output = vscode.window.createOutputChannel('Processing');	// output channel
 	private readonly controlsProvider: ExtensionControlsProvider;	// control panel
 	private readonly linter: ProcessingLinter;
+	private readonly assignmentViewProvider: AssignmentViewProvider;
 	private runtimePanel: ProcessingRuntimePanel | undefined;	// runtime panel
 	private referencePanel: ProcessingReferencePanel | undefined;
 	private javaRuntimeWorker: Worker | undefined;
@@ -121,8 +157,12 @@ class Extension implements vscode.Disposable {
 	constructor(private readonly context: vscode.ExtensionContext) {
 		this.controlsProvider = new ExtensionControlsProvider(this.context.extensionUri, this);
 		this.linter = new ProcessingLinter(context);
+		this.assignmentViewProvider = new AssignmentViewProvider(context.extensionUri, this);
 		this.disposables.push(this.output);
 		this.disposables.push(this.linter);
+		this.disposables.push(vscode.window.registerCustomEditorProvider(AssignmentViewProvider.viewType, this.assignmentViewProvider, {
+			webviewOptions: { retainContextWhenHidden: true }
+		}));
 		this.disposables.push(vscode.window.registerWebviewViewProvider(controlsViewType, this.controlsProvider, {
 			webviewOptions: { retainContextWhenHidden: true }
 		}));
@@ -222,6 +262,210 @@ class Extension implements vscode.Disposable {
 		await this.context.globalState.update(defaultOpenStateKey, true);
 		await new Promise(resolve => setTimeout(resolve, 500));
 		await vscode.commands.executeCommand(`${controlsViewType}.focus`);
+	}
+
+	async startAssignment(assignment: CsptAssignment): Promise<void> {
+		if (await this.writeAssignmentFiles(assignment)) {
+			void vscode.window.showInformationMessage(vscode.l10n.t('Assignment started.'));
+		}
+	}
+
+	async restartAssignment(assignment: CsptAssignment): Promise<void> {
+		const restartLabel = vscode.l10n.t('Restart Assignment');
+		const confirmed = await vscode.window.showWarningMessage(
+			vscode.l10n.t('Restarting this assignment will overwrite template files in the workspace. Continue?'),
+			{ modal: true },
+			restartLabel
+		);
+		if (confirmed !== restartLabel) {
+			return;
+		}
+		if (await this.writeAssignmentFiles(assignment)) {
+			void vscode.window.showInformationMessage(vscode.l10n.t('Assignment restarted.'));
+		}
+	}
+
+	private async writeAssignmentFiles(assignment: CsptAssignment): Promise<boolean> {
+		const workspaceFolder = getWorkspaceFolder();
+		if (!workspaceFolder) {
+			void vscode.window.showWarningMessage(vscode.l10n.t('Open a workspace folder before starting an assignment.'));
+			return false;
+		}
+
+		const unpacker = await loadCsptUnpacker(this.context.extensionUri, assignment.uri);
+		const templateFiles = await unpacker.templateFiles();
+		const readme = templateFiles.find(file => file.path.toLowerCase() === 'readme.md');
+		this.showOutput();
+		this.log(`[assignment] Starting ${assignment.id}`);
+		for (const file of templateFiles) {
+			await this.writeAssignmentTemplate(workspaceFolder, file.path, file.bytes);
+			this.log(`[assignment] Wrote ${file.path}`);
+		}
+		await writeAssignmentData(workspaceFolder, {
+			id: assignment.id,
+			displayName: assignment.displayName,
+			bundleUri: assignment.uri.toString(),
+			startedAt: new Date().toISOString()
+		});
+		this.mode = 'java';
+		await this.refreshState();
+		if (readme) {
+			await vscode.commands.executeCommand('markdown.showPreview', assignmentPath(workspaceFolder, readme.path));
+		}
+		return true;
+	}
+
+	async evaluateAssignment(assignment: CsptAssignment): Promise<void> {
+		const workspaceFolder = getWorkspaceFolder();
+		if (!workspaceFolder) {
+			void vscode.window.showWarningMessage(vscode.l10n.t('Open a workspace folder before evaluating an assignment.'));
+			return;
+		}
+
+		this.showOutput();
+		this.output.clear();
+		this.setCompiling(true);
+		this.setRunning(true);
+		this.log('\n==== BEGIN ASSIGNMENT EVALUATION ====\n');
+		this.log(`[assignment] ${assignment.id}`);
+		const results: CsptCheckResult[] = [];
+		try {
+			for (const check of assignment.checks) {
+				const result = check.type === 'validator'
+					? await this.evaluateValidatorCheck(workspaceFolder, check)
+					: await this.evaluateCompileCheck(workspaceFolder, check);
+				results.push(result);
+				this.log(`[assignment] ${result.passed ? 'PASS' : 'FAIL'} ${result.displayName}`);
+				if (!result.passed && result.reason) {
+					this.log(`[assignment] ${result.reason}`);
+				}
+			}
+
+			const previous = await readAssignmentData(workspaceFolder);
+			await writeAssignmentData(workspaceFolder, {
+				id: assignment.id,
+				displayName: assignment.displayName,
+				bundleUri: assignment.uri.toString(),
+				startedAt: previous?.startedAt ?? new Date().toISOString(),
+				evaluatedAt: new Date().toISOString(),
+				results
+			});
+			this.log('\n==== ASSIGNMENT EVALUATION FINISHED ====\n');
+		} finally {
+			this.setRunning(false);
+			this.setCompiling(false);
+			await this.refreshState();
+		}
+	}
+
+	private async evaluateCompileCheck(workspaceFolder: vscode.WorkspaceFolder, check: CompileCheck): Promise<CsptCheckResult> {
+		try {
+			const sources = await this.collectAssignmentSources(workspaceFolder);
+			await this.compileJavaOnly(sources, check.hidden);
+			return this.assignmentResult(check, true);
+		} catch (error) {
+			return this.assignmentResult(check, false, check.hidden ? undefined : cleanErrorMessage(error));
+		}
+	}
+
+	private async evaluateValidatorCheck(workspaceFolder: vscode.WorkspaceFolder, check: ValidatorCheck): Promise<CsptCheckResult> {
+		try {
+			const sources = [
+				...await this.collectAssignmentSources(workspaceFolder),
+				...Object.entries(check.files).map(([path, content]) => ({
+					uri: vscode.Uri.parse(`cspt-validator:/${path}`),
+					path,
+					content
+				}))
+			];
+			const mainSource = this.findValidatorEntrypoint(sources, check);
+			const wasmBytes = await this.compileJava(sources, mainSource, `${check.id}.wasm`, check.mainClass, check.hidden);
+			const run = await this.runJavaProgram(wasmBytes, check.args ?? [], check.timeoutMs, check.hidden);
+			const failed = run.stderr.trim().length > 0 || run.error !== undefined;
+			return this.assignmentResult(check, !failed, check.hidden ? undefined : (run.error ?? run.stderr.trim()) || undefined);
+		} catch (error) {
+			return this.assignmentResult(check, false, check.hidden ? undefined : cleanErrorMessage(error));
+		}
+	}
+
+	private async collectAssignmentSources(workspaceFolder: vscode.WorkspaceFolder): Promise<readonly WorkspaceSource[]> {
+		const collection = await collectSources('java');
+		const sources = collection.sources.filter(source => source.uri.scheme !== 'file' || source.uri.path.startsWith(workspaceFolder.uri.path));
+		if (!sources.length) {
+			throw new Error('No Java source files were found.');
+		}
+		return sources;
+	}
+
+	private findValidatorEntrypoint(sources: readonly WorkspaceSource[], check: ValidatorCheck): WorkspaceSource {
+		const expected = `${check.mainClass.replace(/\./g, '/')}.java`;
+		const found = sources.find(source => source.path === expected || stripExtension(source.path.split('/').pop() ?? '') === check.mainClass.split('.').pop());
+		if (!found) {
+			throw new Error(`Validator entrypoint not found: ${check.mainClass}`);
+		}
+		return found;
+	}
+
+	private assignmentResult(check: CompileCheck | ValidatorCheck, passed: boolean, reason?: string): CsptCheckResult {
+		const name = check.displayName ?? check.id;
+		return {
+			id: check.id,
+			type: check.type,
+			displayName: check.hidden ? 'Hidden check' : `${check.id}: ${name}`,
+			description: check.hidden ? undefined : check.description,
+			hidden: !!check.hidden,
+			passed,
+			reason
+		};
+	}
+
+	private async runJavaProgram(wasmBytes: Uint8Array, args: readonly string[], timeoutMs: number | undefined, quiet = false): Promise<{ stdout: string; stderr: string; error?: string }> {
+		const module = await this.loadJavaCompilerModule();
+		const runtimeModule = await importModule<{ load(wasmBytes: Uint8Array, options?: Record<string, unknown>): Promise<unknown> }>(this.assetImportUri('compiler.wasm-runtime.js'));
+		let stdout = '';
+		let stderr = '';
+		const hasExceptionMessage = hasWasmExport(wasmBytes, 'teavm.exceptionMessage');
+		const hasStringToJs = hasWasmExport(wasmBytes, 'teavm.stringToJs');
+		try {
+			const program = await module.createJavaProgram(wasmBytes, {
+				runtimeModule,
+				stdio: {
+					stdin: '',
+					stdout: text => { stdout += text; },
+					stderr: text => { stderr += text; }
+				},
+				fs: {
+					onFileWrite: (path, content) => {
+						void writeRuntimeFile(getWorkspaceFolder()?.uri, path, content);
+					},
+					onFileClose: (path, _mode, content) => {
+						if (content) {
+							void writeRuntimeFile(getWorkspaceFolder()?.uri, path, content);
+						}
+					}
+				}
+			});
+			await program.execute({
+				args: [...args],
+				timeoutMs
+			});
+			return { stdout, stderr };
+		} catch (error) {
+			const message = cleanJavaErrorMessage(error);
+			if (!quiet && cleanErrorMessage(error) === '(could not fetch message)') {
+				this.log(`[assignment] Java exception message exports: teavm.exceptionMessage=${hasExceptionMessage}, teavm.stringToJs=${hasStringToJs}`);
+			}
+			return { stdout, stderr, error: message };
+		}
+	}
+
+	private async writeAssignmentTemplate(workspaceFolder: vscode.WorkspaceFolder, path: string, bytes: Uint8Array): Promise<void> {
+		const uri = assignmentPath(workspaceFolder, path);
+		const folder = parentUri(uri);
+		if (folder.toString() !== workspaceFolder.uri.toString()) {
+			await vscode.workspace.fs.createDirectory(folder);
+		}
+		await vscode.workspace.fs.writeFile(uri, bytes);
 	}
 
 	async compile(): Promise<void> {
@@ -339,12 +583,38 @@ class Extension implements vscode.Disposable {
 		return generated.wasmBytes;
 	}
 
-	private async compileJava(sources: readonly WorkspaceSource[], mainSource: WorkspaceSource, targetFileName: string): Promise<Uint8Array> {
+	private async compileJavaOnly(sources: readonly WorkspaceSource[], quiet = false): Promise<void> {
 		this.log('\n[compiler] Loading Java compiler...');
 		const module = await this.loadJavaCompilerModule();
 		const compiler = await module.createCompiler(this.compilerOptions());
 		const diagnostics = compiler.onDiagnostic(diagnostic => {
-			this.log(formatDiagnostic(diagnostic));
+			if (!quiet) {
+				this.log(formatDiagnostic(diagnostic));
+			}
+		});
+
+		try {
+			for (const source of sources) {
+				compiler.addSource(source.path, source.content);
+			}
+
+			this.log('[compiler] Compiling Java sources...');
+			if (!compiler.compile()) {
+				throw new Error('Java compilation failed.');
+			}
+		} finally {
+			diagnostics.dispose();
+		}
+	}
+
+	private async compileJava(sources: readonly WorkspaceSource[], mainSource: WorkspaceSource, targetFileName: string, mainClassOverride?: string, quiet = false): Promise<Uint8Array> {
+		this.log('\n[compiler] Loading Java compiler...');
+		const module = await this.loadJavaCompilerModule();
+		const compiler = await module.createCompiler(this.compilerOptions());
+		const diagnostics = compiler.onDiagnostic(diagnostic => {
+			if (!quiet) {
+				this.log(formatDiagnostic(diagnostic));
+			}
 		});
 
 		try {
@@ -357,8 +627,10 @@ class Extension implements vscode.Disposable {
 				throw new Error('Java compilation failed.');
 			}
 
-			const mainClass = this.resolveJavaMainClass(compiler.findMainClasses(), mainSource);
-			this.log(`[compiler] Main class: ${mainClass}`);
+			const mainClass = mainClassOverride ?? this.resolveJavaMainClass(compiler.findMainClasses(), mainSource);
+			if (!quiet) {
+				this.log(`[compiler] Main class: ${mainClass}`);
+			}
 			const emitted = compiler.emitWasm({
 				mainClass,
 				outputName: stripWasmExtension(targetFileName),
@@ -369,7 +641,7 @@ class Extension implements vscode.Disposable {
 			if (!emitted.ok || !emitted.bytes) {
 				throw new Error('TeaVM did not produce a valid WebAssembly output.');
 			}
-			if (emitted.files.length) {
+			if (!quiet && emitted.files.length) {
 				this.log(`[compiler] Generated files: ${emitted.files.join(', ')}`);
 			}
 			return new Uint8Array(emitted.bytes);

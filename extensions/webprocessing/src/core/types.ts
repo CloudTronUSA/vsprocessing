@@ -19,7 +19,6 @@ export interface BuildArtifact {
 export interface ExtensionState {
 	readonly mode: SourceKind;
 	readonly processingOutput: ProcessingOutputTarget;
-	readonly assignment_mode: boolean;
 	readonly hasSources: boolean;
 	readonly hasCompiled: boolean;
 	readonly isCompiling: boolean;
@@ -38,10 +37,6 @@ export interface ExtensionController {
 	setProcessingOutput(output: ProcessingOutputTarget): Promise<void>;
 	compile(): Promise<void>;
 	run(): Promise<void>;
-	runAssignmentTests(): Promise<void>;
-	openTestReport(): Promise<void>;
-	createAssignment(): Promise<void>;
-	editAssignment(): Promise<void>;
 	exportWebsite(): Promise<void>;
 	stop(): void;
 	openReference(): Promise<void>;

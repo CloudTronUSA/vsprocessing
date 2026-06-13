@@ -34,10 +34,7 @@
     "onCommand:webprocessing.openReference",
     "onCommand:webprocessing.openApcsaReference",
     "onCommand:webprocessing.openReferenceSheet",
-    "onCommand:webprocessing.runAssignmentTests",
-    "onCommand:webprocessing.openTestReport",
-    "onCommand:webprocessing.createAssignment",
-    "onCommand:webprocessing.editAssignment"
+    "onCustomEditor:webprocessing.csptAssignment"
   ],
   "contributes": {
     "languages": [
@@ -47,6 +44,16 @@
           ".java",
           ".pde"
         ]
+      },
+      {
+        "id": "cspt",
+        "extensions": [
+          ".cspt"
+        ],
+        "icon": {
+          "light": "./media/icons/cspt.svg",
+          "dark": "./media/icons/cspt.svg"
+        }
       }
     ],
     "configurationDefaults": {
@@ -86,6 +93,18 @@
         }
       ]
     },
+    "customEditors": [
+      {
+        "viewType": "webprocessing.csptAssignment",
+        "displayName": "CSPT Assignment",
+        "selector": [
+          {
+            "filenamePattern": "*.cspt"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
     "commands": [
       {
         "command": "webprocessing.compile",
@@ -128,41 +147,17 @@
         "title": "%command.openReferenceSheet%",
         "category": "%command.category%",
         "icon": "$(references)"
-      },
-      {
-        "command": "webprocessing.runAssignmentTests",
-        "title": "%command.runAssignmentTests%",
-        "category": "%command.category%",
-        "icon": "$(run)"
-      },
-      {
-        "command": "webprocessing.openTestReport",
-        "title": "%command.openTestReport%",
-        "category": "%command.category%",
-        "icon": "$(checklist)"
-      },
-      {
-        "command": "webprocessing.createAssignment",
-        "title": "%command.createAssignment%",
-        "category": "%command.category%",
-        "icon": "$(new-file)"
-      },
-      {
-        "command": "webprocessing.editAssignment",
-        "title": "%command.editAssignment%",
-        "category": "%command.category%",
-        "icon": "$(edit)"
       }
     ],
     "menus": {
       "commandPalette": [
         {
           "command": "webprocessing.compile",
-          "when": "workspaceFolderCount != 0 && !webprocessing.assignment_mode && !webprocessing.isCompiling && !webprocessing.isRunning"
+          "when": "workspaceFolderCount != 0 && !webprocessing.isCompiling && !webprocessing.isRunning"
         },
         {
           "command": "webprocessing.run",
-          "when": "webprocessing.hasCompiled && !webprocessing.assignment_mode && !webprocessing.isCompiling && !webprocessing.isRunning"
+          "when": "webprocessing.hasCompiled && !webprocessing.isCompiling && !webprocessing.isRunning"
         },
         {
           "command": "webprocessing.stop",
@@ -170,7 +165,7 @@
         },
         {
           "command": "webprocessing.exportWebsite",
-          "when": "workspaceFolderCount != 0 && !webprocessing.assignment_mode && !webprocessing.isCompiling && !webprocessing.isRunning"
+          "when": "workspaceFolderCount != 0 && !webprocessing.isCompiling && !webprocessing.isRunning"
         },
         {
           "command": "webprocessing.openReference"
@@ -180,22 +175,6 @@
         },
         {
           "command": "webprocessing.openReferenceSheet"
-        },
-        {
-          "command": "webprocessing.runAssignmentTests",
-          "when": "workspaceFolderCount != 0 && webprocessing.assignment_mode && !webprocessing.isCompiling && !webprocessing.isRunning"
-        },
-        {
-          "command": "webprocessing.openTestReport",
-          "when": "webprocessing.assignment_mode"
-        },
-        {
-          "command": "webprocessing.createAssignment",
-          "when": "workspaceFolderCount != 0 && !webprocessing.assignment_mode && !webprocessing.isCompiling && !webprocessing.isRunning"
-        },
-        {
-          "command": "webprocessing.editAssignment",
-          "when": "webprocessing.assignment_mode && !webprocessing.isCompiling && !webprocessing.isRunning"
         }
       ]
     },

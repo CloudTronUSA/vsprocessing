@@ -115,10 +115,6 @@
 		</div>
 		<div class="bottom">
 			<button id="exportWebsite" class="secondary" type="button">Export Website</button>
-			<button id="createAssignment" class="secondary" type="button">Create Assignment</button>
-			<button id="runAssignmentTests" class="secondary" type="button">Run Assignment Tests</button>
-			<button id="openTestReport" class="secondary" type="button">Open Test Case Report</button>
-			<button id="editAssignment" class="secondary" type="button">Edit Autograded Assignment</button>
 			<button id="processingReference" class="secondary" type="button">Open Processing Reference</button>
 			<button id="apcsaReference" class="secondary" type="button">Open APCSA Reference</button>
 		</div>
@@ -131,10 +127,6 @@
 			run: document.getElementById('run'),
 			stop: document.getElementById('stop'),
 			exportWebsite: document.getElementById('exportWebsite'),
-			createAssignment: document.getElementById('createAssignment'),
-			runAssignmentTests: document.getElementById('runAssignmentTests'),
-			openTestReport: document.getElementById('openTestReport'),
-			editAssignment: document.getElementById('editAssignment'),
 			processingReference: document.getElementById('processingReference'),
 			apcsaReference: document.getElementById('apcsaReference')
 		};
@@ -170,19 +162,12 @@
 			Object.assign(state, next);
 			if (mode) {
 				mode.value = state.mode || 'processing';
-				mode.disabled = state.assignment_mode || state.isCompiling || state.isRunning;
+				mode.disabled = state.isCompiling || state.isRunning;
 			}
 			setDisabled(buttons.compile, !state.hasSources || state.isCompiling || state.isRunning);
 			setDisabled(buttons.run, !state.hasSources || !state.hasCompiled || state.isCompiling || state.isRunning);
 			setDisabled(buttons.stop, !state.isRunning);
 			setDisabled(buttons.exportWebsite, state.mode !== 'processing' || !state.hasSources || state.isCompiling || state.isRunning);
-			setDisabled(buttons.createAssignment, state.assignment_mode || state.isCompiling || state.isRunning);
-			setDisabled(buttons.runAssignmentTests, !state.assignment_mode || state.isCompiling || state.isRunning);
-			setDisabled(buttons.openTestReport, !state.assignment_mode);
-			setDisabled(buttons.editAssignment, !state.assignment_mode || state.isCompiling || state.isRunning);
-			setHidden(buttons.runAssignmentTests, !state.assignment_mode);
-			setHidden(buttons.openTestReport, !state.assignment_mode);
-			setHidden(buttons.editAssignment, !state.assignment_mode);
 			setText(status, state.status || '');
 			setText(warning, state.warning || '');
 			setHidden(warning, !state.warning);
@@ -192,10 +177,6 @@
 		onClick(buttons.run, () => vscode.postMessage({ type: 'run' }));
 		onClick(buttons.stop, () => vscode.postMessage({ type: 'stop' }));
 		onClick(buttons.exportWebsite, () => vscode.postMessage({ type: 'exportWebsite' }));
-		onClick(buttons.createAssignment, () => vscode.postMessage({ type: 'createAssignment' }));
-		onClick(buttons.runAssignmentTests, () => vscode.postMessage({ type: 'runAssignmentTests' }));
-		onClick(buttons.openTestReport, () => vscode.postMessage({ type: 'openTestReport' }));
-		onClick(buttons.editAssignment, () => vscode.postMessage({ type: 'editAssignment' }));
 		onClick(buttons.processingReference, () => vscode.postMessage({ type: 'openReference' }));
 		onClick(buttons.apcsaReference, () => vscode.postMessage({ type: 'openApcsaReference' }));
 		if (mode) {
