@@ -19,10 +19,14 @@ const runCommand = 'webprocessing.run';
 const stopCommand = 'webprocessing.stop';
 const openReferenceCommand = 'webprocessing.openReference';
 const openApcsaReferenceCommand = 'webprocessing.openApcsaReference';
+const refreshAssignmentsCommand = 'webprocessing.refreshAssignments';
 const controlsViewType = 'webprocessing.controls';
 const runtimeViewType = 'webruntime';
 const referenceViewType = 'webprocessing.reference';
+const assignmentBrowserViewType = 'webprocessing.assignments';
 const defaultOpenStateKey = 'webprocessing.defaultOpen.v1';
+const assignmentCatalogUrl = 'https://vsp-cspt-store.cloudtron.us/catalog.json';
+const assignmentStoreBaseUrl = 'https://vsp-cspt-store.cloudtron.us/';
 
 type ProcessingModule = typeof import('../lib/teavm-javac/processing-teavm.js');
 type CompilerModule = typeof import('../lib/teavm-javac/teavm-javac.js');
@@ -49,6 +53,12 @@ interface ExtensionState {
 interface ExtensionControlsViewState extends ExtensionState {
 	readonly status: string;
 	readonly warning: string;
+}
+
+interface AssignmentCatalogItem {
+	readonly id: string;
+	readonly name: string;
+	readonly descriptionPreview: string;
 }
 
 const importModule = new Function('specifier', 'return import(specifier);') as <T>(specifier: string) => Promise<T>;
@@ -142,6 +152,7 @@ class Extension implements vscode.Disposable {
 	private readonly controlsProvider: ExtensionControlsProvider;	// control panel
 	private readonly linter: ProcessingLinter;
 	private readonly assignmentViewProvider: AssignmentViewProvider;
+	private readonly assignmentBrowserProvider: AssignmentBrowserProvider;
 	private runtimePanel: ProcessingRuntimePanel | undefined;	// runtime panel
 	private referencePanel: ProcessingReferencePanel | undefined;
 	private javaRuntimeWorker: Worker | undefined;
@@ -150,6 +161,9 @@ class Extension implements vscode.Disposable {
 	private mode: SourceKind = 'processing';
 	private processingCompilerModule: Promise<ProcessingModule> | undefined;
 	private javaCompilerModule: Promise<CompilerModule> | undefined;
+	private assignments: readonly AssignmentCatalogItem[] = [];
+	private assignmentsLoading = false;
+	private assignmentsError = '';
 	private buildArtifact: BuildArtifact | undefined;
 	private compiling = false;
 	private running = false;
@@ -158,6 +172,10 @@ class Extension implements vscode.Disposable {
 		this.controlsProvider = new ExtensionControlsProvider(this.context.extensionUri, this);
 		this.linter = new ProcessingLinter(context);
 		this.assignmentViewProvider = new AssignmentViewProvider(context.extensionUri, this);
+		this.assignmentBrowserProvider = new AssignmentBrowserProvider(context.extensionUri, {
+			getState: () => this.getAssignmentBrowserState(),
+			openAssignment: id => this.openCatalogAssignment(id)
+		});
 		this.disposables.push(this.output);
 		this.disposables.push(this.linter);
 		this.disposables.push(vscode.window.registerCustomEditorProvider(AssignmentViewProvider.viewType, this.assignmentViewProvider, {
@@ -166,12 +184,16 @@ class Extension implements vscode.Disposable {
 		this.disposables.push(vscode.window.registerWebviewViewProvider(controlsViewType, this.controlsProvider, {
 			webviewOptions: { retainContextWhenHidden: true }
 		}));
+		this.disposables.push(vscode.window.registerWebviewViewProvider(assignmentBrowserViewType, this.assignmentBrowserProvider, {
+			webviewOptions: { retainContextWhenHidden: true }
+		}));
 		// commands
 		this.disposables.push(vscode.commands.registerCommand(compileCommand, () => this.compile()));
 		this.disposables.push(vscode.commands.registerCommand(runCommand, () => this.run()));
 		this.disposables.push(vscode.commands.registerCommand(stopCommand, () => this.stop()));
 		this.disposables.push(vscode.commands.registerCommand(openReferenceCommand, () => this.openReference()));
 		this.disposables.push(vscode.commands.registerCommand(openApcsaReferenceCommand, () => this.openApcsaReference()));
+		this.disposables.push(vscode.commands.registerCommand(refreshAssignmentsCommand, () => this.loadAssignmentCatalog()));
 		// events
 		this.disposables.push(vscode.workspace.onDidChangeWorkspaceFolders(() => this.refreshState()));
 		this.disposables.push(vscode.workspace.onDidOpenTextDocument(() => this.refreshState()));
@@ -180,6 +202,7 @@ class Extension implements vscode.Disposable {
 		this.disposables.push(vscode.workspace.onDidCreateFiles(() => this.refreshState()));
 		void this.refreshState();
 		void this.openControlView();
+		void this.loadAssignmentCatalog();
 	}
 
 	dispose(): void {
@@ -285,6 +308,18 @@ class Extension implements vscode.Disposable {
 		}
 	}
 
+	async downloadAssignment(assignment: CsptAssignment, bytes: Uint8Array): Promise<vscode.Uri | undefined> {
+		const workspaceFolder = getWorkspaceFolder();
+		if (!workspaceFolder) {
+			void vscode.window.showWarningMessage(vscode.l10n.t('Open a workspace folder before downloading an assignment.'));
+			return undefined;
+		}
+		const fileName = `${assignment.id.replace(/[^a-zA-Z0-9._-]/g, '-')}.cspt`;
+		const uri = vscode.Uri.joinPath(workspaceFolder.uri, fileName);
+		await vscode.workspace.fs.writeFile(uri, bytes);
+		return uri;
+	}
+
 	private async writeAssignmentFiles(assignment: CsptAssignment): Promise<boolean> {
 		const workspaceFolder = getWorkspaceFolder();
 		if (!workspaceFolder) {
@@ -313,6 +348,60 @@ class Extension implements vscode.Disposable {
 			await vscode.commands.executeCommand('markdown.showPreview', assignmentPath(workspaceFolder, readme.path));
 		}
 		return true;
+	}
+
+	async openCatalogAssignment(id: string): Promise<void> {
+		const safeId = this.assignments.find(item => item.id === id)?.id;
+		if (!safeId) {
+			return;
+		}
+		try {
+			const response = await fetch(`${assignmentStoreBaseUrl}${encodeURIComponent(safeId)}.cspt`);
+			if (!response.ok) {
+				throw new Error(`HTTP ${response.status}`);
+			}
+			const bytes = new Uint8Array(await response.arrayBuffer());
+			await this.assignmentViewProvider.openPreview(safeId, bytes);
+		} catch (error) {
+			void vscode.window.showErrorMessage(vscode.l10n.t('Failed to open assignment: {0}', String(error)));
+		}
+	}
+
+	async openAssignmentBrowser(): Promise<void> {
+		await vscode.commands.executeCommand(`${assignmentBrowserViewType}.focus`);
+	}
+
+	private getAssignmentBrowserState(): AssignmentBrowserViewState {
+		return {
+			assignments: this.assignments,
+			loading: this.assignmentsLoading,
+			error: this.assignmentsError
+		};
+	}
+
+	private async loadAssignmentCatalog(): Promise<void> {
+		this.assignmentsLoading = true;
+		this.assignmentsError = '';
+		this.controlsProvider.update();
+		this.assignmentBrowserProvider.update();
+		try {
+			const response = await fetch(assignmentCatalogUrl);
+			if (!response.ok) {
+				throw new Error(`HTTP ${response.status}`);
+			}
+			const catalog = await response.json() as AssignmentCatalogItem[];
+			this.assignments = catalog.filter(item =>
+				typeof item.id === 'string'
+				&& typeof item.name === 'string'
+				&& typeof item.descriptionPreview === 'string'
+			);
+		} catch (error) {
+			this.assignmentsError = String(error);
+		} finally {
+			this.assignmentsLoading = false;
+			this.controlsProvider.update();
+			this.assignmentBrowserProvider.update();
+		}
 	}
 
 	async evaluateAssignment(assignment: CsptAssignment): Promise<void> {
@@ -939,6 +1028,7 @@ type controlsMessage =
 	| { readonly type: 'compile' }
 	| { readonly type: 'run' }
 	| { readonly type: 'stop' }
+	| { readonly type: 'openAssignments' }
 	| { readonly type: 'openReference' }
 	| { readonly type: 'openApcsaReference' }
 	| { readonly type: 'mode'; readonly mode: SourceKind };
@@ -972,6 +1062,9 @@ class ExtensionControlsProvider implements vscode.WebviewViewProvider {
 				break;
 			case 'stop':
 				this.controller.stop();
+				break;
+			case 'openAssignments':
+				void this.controller.openAssignmentBrowser();
 				break;
 			case 'openReference':
 				void this.controller.openReference();
@@ -1010,6 +1103,55 @@ class ExtensionControlsProvider implements vscode.WebviewViewProvider {
 		return renderTemplate(await readTemplate(this.extensionUri, 'processing-controls.html'), {
 			nonce,
 			initialState
+		});
+	}
+}
+
+interface AssignmentBrowserViewState {
+	readonly assignments: readonly AssignmentCatalogItem[];
+	readonly loading: boolean;
+	readonly error: string;
+}
+
+type AssignmentBrowserMessage =
+	| { readonly type: 'openAssignment'; readonly id: string };
+
+interface AssignmentBrowserController {
+	getState(): AssignmentBrowserViewState;
+	openAssignment(id: string): Promise<void>;
+}
+
+class AssignmentBrowserProvider implements vscode.WebviewViewProvider {
+	private view: vscode.WebviewView | undefined;
+	constructor(
+		private readonly extensionUri: vscode.Uri,
+		private readonly controller: AssignmentBrowserController
+	) { }
+
+	async resolveWebviewView(webviewView: vscode.WebviewView): Promise<void> {
+		this.view = webviewView;
+		webviewView.webview.options = { enableScripts: true };
+		webviewView.webview.html = await this.getHtml();
+		webviewView.webview.onDidReceiveMessage(message => this.handleMessage(message));
+	}
+
+	update(): void {
+		void this.view?.webview.postMessage({ type: 'state', state: this.controller.getState() });
+	}
+
+	private async handleMessage(message: AssignmentBrowserMessage): Promise<void> {
+		switch (message.type) {
+			case 'openAssignment':
+				await this.controller.openAssignment(message.id);
+				break;
+		}
+	}
+
+	private async getHtml(): Promise<string> {
+		const nonce = createNonce();
+		return renderTemplate(await readTemplate(this.extensionUri, 'assignment-browser.html'), {
+			nonce,
+			initialState: escapeScriptJson(JSON.stringify(this.controller.getState()))
 		});
 	}
 }

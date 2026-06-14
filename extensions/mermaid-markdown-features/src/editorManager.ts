@@ -176,7 +176,7 @@ class MermaidPreview extends Disposable {
 		this._webviewPanel.webview.html = this._getHtml();
 
 		// Register with the webview manager
-		this._register(this._webviewManager.registerWebview(this.diagramId, this._webviewPanel.webview, this._mermaidSource, undefined, 'editor'));
+		this._register(this._webviewManager.registerWebview(this.diagramId, this._webviewPanel.webview, this._mermaidSource, undefined));
 
 		this._register(this._webviewPanel.onDidChangeViewState(e => {
 			if (e.webviewPanel.active) {

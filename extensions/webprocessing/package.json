@@ -27,6 +27,7 @@
   "activationEvents": [
     "onStartupFinished",
     "onView:webprocessing.controls",
+    "onView:webprocessing.assignments",
     "onCommand:webprocessing.compile",
     "onCommand:webprocessing.run",
     "onCommand:webprocessing.stop",
@@ -34,6 +35,7 @@
     "onCommand:webprocessing.openReference",
     "onCommand:webprocessing.openApcsaReference",
     "onCommand:webprocessing.openReferenceSheet",
+    "onCommand:webprocessing.refreshAssignments",
     "onCustomEditor:webprocessing.csptAssignment"
   ],
   "contributes": {
@@ -88,6 +90,14 @@
         {
           "id": "webprocessing.controls",
           "name": "%view.controls.name%",
+          "type": "webview",
+          "visibility": "visible"
+        }
+      ],
+      "webprocessingAssignments": [
+        {
+          "id": "webprocessing.assignments",
+          "name": "%view.assignments.name%",
           "type": "webview",
           "visibility": "visible"
         }
@@ -147,6 +157,12 @@
         "title": "%command.openReferenceSheet%",
         "category": "%command.category%",
         "icon": "$(references)"
+      },
+      {
+        "command": "webprocessing.refreshAssignments",
+        "title": "%command.refreshAssignments%",
+        "category": "%command.category%",
+        "icon": "$(refresh)"
       }
     ],
     "menus": {
@@ -176,6 +192,13 @@
         {
           "command": "webprocessing.openReferenceSheet"
         }
+      ],
+      "view/title": [
+        {
+          "command": "webprocessing.refreshAssignments",
+          "when": "view == webprocessing.assignments",
+          "group": "navigation"
+        }
       ]
     },
     "viewsContainers": {
@@ -184,6 +207,11 @@
           "id": "webprocessing",
           "title": "%container.title%",
           "icon": "$(symbol-event)"
+        },
+        {
+          "id": "webprocessingAssignments",
+          "title": "%container.assignments.title%",
+          "icon": "$(checklist)"
         }
       ]
     }

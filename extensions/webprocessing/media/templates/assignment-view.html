@@ -175,10 +175,11 @@
 			name.textContent = state.displayName;
 			meta.textContent = 'ID: ' + state.id;
 			description.textContent = state.description;
-			start.hidden = state.started;
-			restart.hidden = !state.started;
-			evaluate.hidden = !state.started;
-			start.disabled = state.running;
+			start.hidden = state.started && !state.preview;
+			start.textContent = state.preview ? 'Download Assignment' : 'Start Assignment';
+			restart.hidden = !state.started || state.preview;
+			evaluate.hidden = !state.started || state.preview;
+			start.disabled = state.running || !state.hasWorkspace;
 			restart.disabled = state.running;
 			evaluate.disabled = state.running;
 			evaluate.innerHTML = state.running ? '<span class="spinner"></span>Running Evaluation' : 'Begin Evaluation';

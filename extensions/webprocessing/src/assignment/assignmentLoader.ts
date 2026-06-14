@@ -29,6 +29,15 @@ interface CsptUnpackerModule {
 
 export async function loadCsptAssignment(extensionUri: vscode.Uri, uri: vscode.Uri): Promise<CsptAssignment> {
 	const unpacker = await loadCsptUnpacker(extensionUri, uri);
+	return loadCsptAssignmentFromUnpacker(uri, unpacker);
+}
+
+export async function loadCsptAssignmentFromBytes(extensionUri: vscode.Uri, uri: vscode.Uri, bytes: Uint8Array): Promise<CsptAssignment> {
+	const unpacker = await loadCsptUnpackerFromBytes(extensionUri, bytes);
+	return loadCsptAssignmentFromUnpacker(uri, unpacker);
+}
+
+async function loadCsptAssignmentFromUnpacker(uri: vscode.Uri, unpacker: CsptUnpacker): Promise<CsptAssignment> {
 	const [id, displayName, description, checks] = await Promise.all([
 		unpacker.id(),
 		unpacker.displayName(),
@@ -39,8 +48,12 @@ export async function loadCsptAssignment(extensionUri: vscode.Uri, uri: vscode.U
 }
 
 export async function loadCsptUnpacker(extensionUri: vscode.Uri, uri: vscode.Uri): Promise<CsptUnpacker> {
+	return loadCsptUnpackerFromBytes(extensionUri, await vscode.workspace.fs.readFile(uri));
+}
+
+export async function loadCsptUnpackerFromBytes(extensionUri: vscode.Uri, bytes: Uint8Array): Promise<CsptUnpacker> {
 	const module = await importModule<CsptUnpackerModule>(vscode.Uri.joinPath(extensionUri, 'lib', 'cspt-unpacker', 'index.js').toString());
-	return new module.Unpacker(await vscode.workspace.fs.readFile(uri));
+	return new module.Unpacker(bytes);
 }
 
 export async function readAssignmentData(workspaceFolder: vscode.WorkspaceFolder | undefined): Promise<CsptAssignmentData | undefined> {

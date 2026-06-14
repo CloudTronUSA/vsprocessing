@@ -57,6 +57,8 @@ export interface AssignmentViewState {
 	readonly displayName: string;
 	readonly description: string;
 	readonly started: boolean;
+	readonly preview: boolean;
+	readonly hasWorkspace: boolean;
 	readonly running: boolean;
 	readonly results: readonly AssignmentViewCheck[];
 	readonly message: string;
