@@ -415,6 +415,7 @@ class Extension implements vscode.Disposable {
 			description: check.hidden ? undefined : check.description,
 			hidden: !!check.hidden,
 			passed,
+			evaluatedAt: new Date().toISOString(),
 			reason
 		};
 	}

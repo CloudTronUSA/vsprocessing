@@ -107,6 +107,7 @@ export class AssignmentViewProvider implements vscode.CustomReadonlyEditorProvid
 					displayName: this.checkDisplayName(check),
 					description: check.hidden ? undefined : check.description,
 					passed: result?.passed,
+					evaluatedAt: result?.evaluatedAt,
 					reason: result?.reason
 				};
 			}),

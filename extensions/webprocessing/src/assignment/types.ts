@@ -48,6 +48,7 @@ export interface CsptCheckResult {
 	readonly description?: string;
 	readonly hidden: boolean;
 	readonly passed: boolean;
+	readonly evaluatedAt: string;
 	readonly reason?: string;
 }
 
@@ -66,5 +67,6 @@ export interface AssignmentViewCheck {
 	readonly displayName: string;
 	readonly description?: string;
 	readonly passed?: boolean;
+	readonly evaluatedAt?: string;
 	readonly reason?: string;
 }

@@ -14,7 +14,7 @@
 		}
 		body {
 			box-sizing: border-box;
-			padding: 18px 22px;
+			padding: 18px 22px 44px;
 		}
 		main {
 			max-width: 780px;
@@ -69,6 +69,9 @@
 			gap: 8px;
 			margin-top: 12px;
 		}
+		.bottom-spacer {
+			height: 40px;
+		}
 		.result {
 			border: 1px solid var(--vscode-panel-border);
 			background: var(--vscode-editor-background);
@@ -83,6 +86,11 @@
 			font-size: 11px;
 			font-weight: 600;
 			text-transform: uppercase;
+		}
+		.result-time {
+			color: var(--vscode-descriptionForeground);
+			font-weight: 400;
+			text-transform: none;
 		}
 		.result-description {
 			margin-bottom: 8px;
@@ -131,6 +139,7 @@
 			<h2>Evaluations</h2>
 			<div id="results" class="results"></div>
 		</section>
+		<div class="bottom-spacer" aria-hidden="true"></div>
 	</main>
 	<script nonce="{{nonce}}">
 		const vscode = acquireVsCodeApi();
@@ -143,6 +152,23 @@
 		const evaluate = document.getElementById('evaluate');
 		const message = document.getElementById('message');
 		const results = document.getElementById('results');
+
+		function formatTimestamp(value) {
+			const date = new Date(value);
+			if (Number.isNaN(date.getTime())) {
+				return '';
+			}
+			const pad = number => String(number).padStart(2, '0');
+			return [
+				pad(date.getMonth() + 1),
+				pad(date.getDate()),
+				date.getFullYear()
+			].join('/') + ' ' + [
+				pad(date.getHours()),
+				pad(date.getMinutes()),
+				pad(date.getSeconds())
+			].join(':');
+		}
 
 		function applyState(next) {
 			state = next;
@@ -173,8 +199,18 @@
 				}
 				if (typeof result.passed === 'boolean') {
 					const status = document.createElement('span');
-					status.className = 'result-status ' + (result.passed ? 'passed' : 'failed');
-					status.textContent = result.passed ? 'PASSED' : 'FAILED';
+					status.className = 'result-status';
+					const statusText = document.createElement('span');
+					statusText.className = result.passed ? 'passed' : 'failed';
+					statusText.textContent = result.passed ? 'PASSED' : 'FAILED';
+					status.append(statusText);
+					const timestamp = formatTimestamp(result.evaluatedAt);
+					if (timestamp) {
+						const time = document.createElement('span');
+						time.className = 'result-time';
+						time.textContent = ' on ' + timestamp;
+						status.append(time);
+					}
 					item.append(status);
 				}
 				if (result.reason) {
